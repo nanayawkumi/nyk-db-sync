@@ -1,0 +1,53 @@
+{
+    "name": "nanayawkumi/nyk-db-sync",
+    "description": "Bidirectional MySQL and PostgreSQL schema translation, row sync, dual-write, and cutover for Laravel",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "laravel",
+        "mysql",
+        "postgres",
+        "postgresql",
+        "database",
+        "migration",
+        "sync"
+    ],
+    "authors": [
+        {
+            "name": "Nana Yaw Kumi"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "laravel/framework": "^10.37|^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^10.0|^11.0|^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Nanayawkumi\\NykDbSync\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Nanayawkumi\\NykDbSync\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Nanayawkumi\\NykDbSync\\NykDbSyncServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true
+    }
+}
