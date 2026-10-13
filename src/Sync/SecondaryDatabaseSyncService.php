@@ -69,30 +69,79 @@ final class SecondaryDatabaseSyncService
             'migrations_copied' => 0,
             'ran_at' => now()->toDateTimeString(),
         ];
+        $copiedRows = 0;
+        $copyStarted = 0;
+        $lastBatchAt = 0;
+        $lastCheckpointAt = 0;
+        $finished = false;
+        $checkpoint = function (bool $force = false) use (&$summary, &$copiedRows, &$copyStarted, &$lastBatchAt, &$lastCheckpointAt, &$finished): void {
+            if ($finished || $copyStarted === 0) {
+                return;
+            }
 
-        if (! $schemaOnly) {
-            $this->foreignKeys->withoutChecks($secondary, function () use ($primary, $secondary, $tables, $chunk, $onlyTable, &$summary): void {
-                foreach ($tables as $table) {
-                    $summary['tables'][] = $this->copyTable($primary, $secondary, $table, $chunk, $onlyTable !== null);
-                }
-            });
+            $now = hrtime(true);
+
+            if (! $force && ($now - $lastCheckpointAt) < 5_000_000_000) {
+                return;
+            }
+
+            $lastCheckpointAt = $now;
+            $this->storeMeasuredPace($summary, $copiedRows, ($lastBatchAt - $copyStarted) / 1e9, false);
+        };
+
+        register_shutdown_function(static function () use ($checkpoint, &$finished): void {
+            if ($finished) {
+                return;
+            }
+
+            $checkpoint(true);
+        });
+
+        try {
+            if (! $schemaOnly) {
+                $copyStarted = hrtime(true);
+                $lastBatchAt = $copyStarted;
+                $this->foreignKeys->withoutChecks($secondary, function () use ($primary, $secondary, $tables, $chunk, $onlyTable, &$summary, &$copiedRows, &$lastBatchAt, $checkpoint): void {
+                    foreach ($tables as $table) {
+                        $summary['tables'][] = $this->copyTable(
+                            $primary,
+                            $secondary,
+                            $table,
+                            $chunk,
+                            $onlyTable !== null,
+                            function (int $batch) use (&$copiedRows, &$lastBatchAt, $checkpoint): void {
+                                $copiedRows += $batch;
+                                $lastBatchAt = hrtime(true);
+                                $checkpoint();
+                            },
+                        );
+                        $checkpoint(true);
+                    }
+                });
+            }
+
+            if ($onlyTable === null && config('nyk-db-sync.schema.copy_migration_repository', true)) {
+                $summary['migrations_copied'] = $this->copyMigrationRepository($primary, $secondary, $withSchema, $chunk);
+            }
+
+            $copiedTables = array_column($summary['tables'], 'table');
+
+            if ($summary['migrations_copied'] > 0) {
+                $copiedTables[] = $this->catalog->migrationTable();
+            }
+
+            $this->repairPostgresSequences($secondary, $copiedTables);
+            $this->repairPostgresSequences($primary, $copiedTables);
+            $finished = true;
+            $summary['rows_copied'] = (int) array_sum(array_column($summary['tables'], 'copied')) + (int) $summary['migrations_copied'];
+            $summary['duration_seconds'] = round((hrtime(true) - $started) / 1e9, 3);
+            $copySeconds = $copyStarted === 0 ? 0.0 : ($lastBatchAt - $copyStarted) / 1e9;
+            $this->storeMeasuredPace($summary, (int) $summary['rows_copied'], $copySeconds, true);
+        } catch (Throwable $exception) {
+            $checkpoint(true);
+
+            throw $exception;
         }
-
-        if ($onlyTable === null && config('nyk-db-sync.schema.copy_migration_repository', true)) {
-            $summary['migrations_copied'] = $this->copyMigrationRepository($primary, $secondary, $withSchema, $chunk);
-        }
-
-        $copiedTables = array_column($summary['tables'], 'table');
-
-        if ($summary['migrations_copied'] > 0) {
-            $copiedTables[] = $this->catalog->migrationTable();
-        }
-
-        $this->repairPostgresSequences($secondary, $copiedTables);
-        $this->repairPostgresSequences($primary, $copiedTables);
-        $summary['rows_copied'] = (int) array_sum(array_column($summary['tables'], 'copied')) + (int) $summary['migrations_copied'];
-        $summary['duration_seconds'] = round((hrtime(true) - $started) / 1e9, 3);
-        $this->summaries->put($summary);
 
         return $summary;
     }
@@ -107,13 +156,21 @@ final class SecondaryDatabaseSyncService
         $counts ??= $this->sourceCounts($primary, $onlyTable);
         $previous = $this->summaries->get();
         $rate = null;
+        $runFinished = true;
 
         if (is_array($previous)) {
-            $copied = (int) ($previous['rows_copied'] ?? 0);
-            $seconds = (float) ($previous['duration_seconds'] ?? 0);
+            $runFinished = ! array_key_exists('finished', $previous) || $previous['finished'] === true;
+            $measured = (float) ($previous['rows_per_second'] ?? 0);
 
-            if ($copied >= 50 && $seconds >= 1) {
-                $rate = $copied / $seconds;
+            if ($measured > 0) {
+                $rate = $measured;
+            } else {
+                $copied = (int) ($previous['rows_copied'] ?? 0);
+                $seconds = (float) ($previous['duration_seconds'] ?? 0);
+
+                if ($copied >= 50 && $seconds >= 1) {
+                    $rate = $copied / $seconds;
+                }
             }
         }
 
@@ -123,7 +180,7 @@ final class SecondaryDatabaseSyncService
             $sample = $this->sampleReadRate($primary, $counts);
         }
 
-        return (new SyncEstimate())->build($counts, $rate, $sample);
+        return (new SyncEstimate())->build($counts, $rate, $sample, $runFinished);
     }
 
     /**
@@ -308,7 +365,42 @@ final class SecondaryDatabaseSyncService
             return null;
         }
 
-        return $read / $seconds;
+        $rate = $read / $seconds;
+
+        // A short read of a remote table is mostly connection delay. Using that
+        // delay as a copy speed turns a few seconds of latency into a multi-day
+        // estimate, so fall back to the rough range instead.
+        if ($rate < 1000) {
+            return null;
+        }
+
+        return $rate;
+    }
+
+    /**
+     * @param  array<string, mixed>  $summary
+     */
+    private function storeMeasuredPace(array $summary, int $rowsCopied, float $copySeconds, bool $finished): void
+    {
+        $summary['finished'] = $finished;
+        $summary['rows_copied'] = $rowsCopied;
+        $copySeconds = max(0, $copySeconds);
+
+        if (! $finished) {
+            $summary['duration_seconds'] = round($copySeconds, 3);
+        }
+
+        if ($rowsCopied >= 50 && $copySeconds >= 1) {
+            $summary['rows_per_second'] = round($rowsCopied / $copySeconds, 2);
+        } else {
+            $previous = $this->summaries->get();
+
+            if (is_array($previous) && isset($previous['rows_per_second'])) {
+                $summary['rows_per_second'] = $previous['rows_per_second'];
+            }
+        }
+
+        $this->summaries->put($summary);
     }
 
     /**
@@ -330,7 +422,7 @@ final class SecondaryDatabaseSyncService
     /**
      * @return array{table: string, copied: int, source: int, destination: int}
      */
-    private function copyTable(string $primary, string $secondary, string $table, int $chunk, bool $required): array
+    private function copyTable(string $primary, string $secondary, string $table, int $chunk, bool $required, ?callable $onBatch = null): array
     {
         if (! Schema::connection($primary)->hasTable($table)) {
             if ($required) {
@@ -370,9 +462,9 @@ final class SecondaryDatabaseSyncService
         $metadata = $this->columns->forTable($secondary, $table);
         $driver = DB::connection($secondary)->getDriverName();
 
-        $this->dualWrite->withoutReplication(function () use ($primary, $secondary, $table, $chunk, $uniqueBy, $destinationColumns, $metadata, $driver, &$copied): void {
+        $this->dualWrite->withoutReplication(function () use ($primary, $secondary, $table, $chunk, $uniqueBy, $destinationColumns, $metadata, $driver, $onBatch, &$copied): void {
             $query = DB::connection($primary)->table($table);
-            $callback = function ($rows) use ($secondary, $table, $uniqueBy, $destinationColumns, $metadata, $driver, &$copied): void {
+            $callback = function ($rows) use ($secondary, $table, $uniqueBy, $destinationColumns, $metadata, $driver, $onBatch, &$copied): void {
                 $payload = [];
 
                 foreach ($rows as $row) {
@@ -389,7 +481,12 @@ final class SecondaryDatabaseSyncService
                 }
 
                 DB::connection($secondary)->table($table)->upsert($payload, $uniqueBy);
-                $copied += count($payload);
+                $batch = count($payload);
+                $copied += $batch;
+
+                if ($onBatch !== null) {
+                    $onBatch($batch);
+                }
             };
 
             if (count($uniqueBy) === 1) {

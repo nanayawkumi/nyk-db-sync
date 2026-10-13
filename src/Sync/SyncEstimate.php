@@ -10,7 +10,7 @@ final class SyncEstimate
      * @param  list<array{table?: string, source: int}>  $tables
      * @return array{rows: int, tables: int, label: string, note: string, basis: string}
      */
-    public function build(array $tables, ?float $previousRowsPerSecond, ?float $sampleRowsPerSecond): array
+    public function build(array $tables, ?float $previousRowsPerSecond, ?float $sampleRowsPerSecond, bool $runFinished = true): array
     {
         $rows = 0;
 
@@ -40,8 +40,10 @@ final class SyncEstimate
                 'rows' => $rows,
                 'tables' => $tableCount,
                 'label' => $counts.'. Estimated '.$this->span($seconds * 0.75, $seconds * 1.25).'.',
-                'note' => 'Based on the speed of the last sync.',
-                'basis' => 'previous',
+                'note' => $runFinished
+                    ? 'Based on the speed of the last sync.'
+                    : 'Based on the speed measured before the last sync stopped.',
+                'basis' => $runFinished ? 'previous' : 'partial',
             ];
         }
 
@@ -53,7 +55,7 @@ final class SyncEstimate
                     $rows / $sampleRowsPerSecond * 3,
                     $rows / $sampleRowsPerSecond * 8,
                 ).'.',
-                'note' => 'Rough estimate from a short read of the largest table. A finished sync replaces it with a measured time.',
+                'note' => 'Rough estimate from a short read of the largest table. Copying rows replaces it, even if that sync is stopped before it finishes.',
                 'basis' => 'sample',
             ];
         }
@@ -62,7 +64,7 @@ final class SyncEstimate
             'rows' => $rows,
             'tables' => $tableCount,
             'label' => $counts.'. Estimated '.$this->span($rows / 2000, $rows / 400).'.',
-            'note' => 'Rough estimate. A finished sync replaces it with a measured time.',
+            'note' => 'Rough estimate. Copying rows replaces it, even if that sync is stopped before it finishes.',
             'basis' => 'rough',
         ];
     }

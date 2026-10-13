@@ -84,7 +84,7 @@ php artisan nyk-db-sync:sync --no-schema
 php artisan nyk-db-sync:repair-sequences
 ```
 
-The command and the admin page count the primary rows and show an estimated time before the copy starts. The first estimate is rough. After a sync finishes, the next one uses that run's speed.
+The command and the admin page count the primary rows and show an estimated time before the copy starts. The first estimate is rough. Once rows are copying, the estimate uses that speed, including when a timeout or crash stops the run before it finishes.
 
 A sync creates missing tables and columns, then upserts every row. Existing columns are left as they are. Running it again updates the same primary keys. On Postgres, foreign keys are removed for the copy and put back when it finishes. A constraint that existing rows still violate is restored as `NOT VALID` and written to the log. Each Postgres `id` sequence is set to `MAX(id)` so the next insert does not reuse a copied id.
 

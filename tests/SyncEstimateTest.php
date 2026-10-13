@@ -27,6 +27,18 @@ class SyncEstimateTest extends TestCase
         $this->assertSame('Based on the speed of the last sync.', $estimate['note']);
     }
 
+    public function test_it_uses_the_speed_of_a_sync_that_stopped_before_it_finished(): void
+    {
+        $estimate = (new SyncEstimate())->build([
+            ['source' => 8000000],
+        ], 2000000 / 300, null, false);
+
+        $this->assertSame('partial', $estimate['basis']);
+        $this->assertSame('8,000,000 rows across 1 table. Estimated 15 minutes–25 minutes.', $estimate['label']);
+        $this->assertSame('Based on the speed measured before the last sync stopped.', $estimate['note']);
+        $this->assertSame(8000000, $estimate['rows']);
+    }
+
     public function test_it_gives_a_rough_range_before_any_sync(): void
     {
         $estimate = (new SyncEstimate())->build([

@@ -126,10 +126,18 @@
         <p class="muted">Missing tables are created from the primary. Existing columns are left as they are. New columns are added.</p>
         @if ($summary)
             <p class="muted">
-                Last sync {{ $summary['ran_at'] ?? '' }}
-                ({{ $summary['primary'] ?? '' }} → {{ $summary['secondary'] ?? '' }})
-                @if ($lastDuration)
-                    took {{ $lastDuration }}.
+                @if (($summary['finished'] ?? true) === false)
+                    Sync stopped {{ $summary['ran_at'] ?? '' }}
+                    ({{ $summary['primary'] ?? '' }} → {{ $summary['secondary'] ?? '' }})
+                    @if ($lastDuration)
+                        after copying for {{ $lastDuration }}.
+                    @endif
+                @else
+                    Last sync {{ $summary['ran_at'] ?? '' }}
+                    ({{ $summary['primary'] ?? '' }} → {{ $summary['secondary'] ?? '' }})
+                    @if ($lastDuration)
+                        took {{ $lastDuration }}.
+                    @endif
                 @endif
             </p>
         @endif
