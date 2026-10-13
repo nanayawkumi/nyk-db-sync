@@ -44,6 +44,7 @@
         .nyk-db-sync .progress-top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 8px; }
         .nyk-db-sync .progress-top strong { font-size: 1.15rem; }
         .nyk-db-sync .left { color: var(--amber); font-weight: 700; }
+        .nyk-db-sync .percent { color: var(--teal-deep); font-weight: 700; font-size: 1.15rem; }
         .nyk-db-sync .meter { height: 12px; border-radius: 999px; background: #e4edf5; overflow: hidden; }
         .nyk-db-sync .meter span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #12838d, #1aa37a); }
         .nyk-db-sync .meter.slim { height: 6px; margin-top: 6px; }
@@ -108,6 +109,7 @@
         @if ($progress['known'])
             <div class="progress-top">
                 <strong>{{ number_format($progress['copied']) }} copied</strong>
+                <span class="percent">{{ $progress['percent'] }}%</span>
                 <span class="left">{{ number_format($progress['left']) }} left</span>
             </div>
             <div class="meter" role="img" aria-label="{{ $progress['percent'] }} percent of primary rows are on the secondary">
@@ -146,7 +148,7 @@
         @if ($counts !== [])
             <table>
                 <thead>
-                    <tr><th>Table</th><th>Source</th><th>Destination</th><th>Left</th></tr>
+                    <tr><th>Table</th><th>Source</th><th>Destination</th><th>Left</th><th>Progress</th></tr>
                 </thead>
                 <tbody>
                     @foreach ($counts as $row)
@@ -162,6 +164,7 @@
                             <td>{{ number_format($row['source']) }}</td>
                             <td>{{ $row['destination'] === null ? 'missing' : number_format($row['destination']) }}</td>
                             <td>{{ number_format(max(0, $row['source'] - ($row['destination'] ?? 0))) }}</td>
+                            <td class="percent">{{ $rowPercent }}%</td>
                         </tr>
                     @endforeach
                 </tbody>

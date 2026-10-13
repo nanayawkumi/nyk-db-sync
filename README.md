@@ -157,7 +157,7 @@ Gate::define('manage-database', fn ($user): bool => $user->hasRole('SuperAdmin')
 @endcan
 ```
 
-The page shows whether each database accepted a connection, how many rows are already on the secondary, how many are left, the estimated time, and the switch form. The switch stays disabled while the secondary is down. Confirming the switch is required.
+The page shows whether each database accepted a connection, how many rows are already on the secondary, how many are left, that share as a percentage, the estimated time, and the switch form. The switch stays disabled while the secondary is down. Confirming the switch is required.
 
 ## Schema limits
 

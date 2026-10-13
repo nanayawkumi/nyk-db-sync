@@ -30,6 +30,7 @@ class AdminPageTest extends TestCase
             ->assertSee('Estimated')
             ->assertSee('0 copied')
             ->assertSee('1 left')
+            ->assertSee('0%')
             ->assertDontSee('Not connected');
 
         $this->from('/nyk-db-sync')->post('/nyk-db-sync/sync')->assertRedirect('/nyk-db-sync');
