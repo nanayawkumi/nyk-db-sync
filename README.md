@@ -98,7 +98,7 @@ Every primary table is discovered. `skip_tables` defaults to `migrations` (that 
 
 A sync sets each Postgres `id` sequence to `MAX(id)` on both connections. Inserting a copied id does not move a sequence by itself, so this is what stops the next insert from reusing one.
 
-Tables that only exist on the secondary are left alone. Columns that already exist are not altered. New columns are added. Foreign keys are created with the table when the referenced table already exists.
+Tables that only exist on the secondary are left alone. Columns that already exist are not altered. New columns are added. Foreign keys are created with the table when the referenced table already exists. Running the sync again upserts rows and skips a foreign key that is already on the table, so Postgres error `42710` (constraint already exists) does not stop the copy.
 
 ## Dual-write
 

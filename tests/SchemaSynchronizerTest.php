@@ -44,6 +44,12 @@ class SchemaSynchronizerTest extends TestCase
         $this->assertSame(1, (int) $parent->active);
         $this->assertSame($parentId, (int) $child->z_parent_id);
         $this->assertSame('Child', $child->label);
+
+        $second = app(SecondaryDatabaseSyncService::class)->sync();
+
+        $this->assertSame([], $second['schema']['created']);
+        $this->assertSame([], $second['schema']['foreign_keys']);
+        $this->assertSame(1, DB::connection('sqlite_secondary')->table('a_children')->count());
     }
 
     public function test_a_second_sync_does_not_duplicate_rows_and_adds_missing_columns(): void

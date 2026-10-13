@@ -132,7 +132,17 @@ final class SchemaSynchronizer
 
             $this->addIndexes($blueprint, $definition['indexes'], $created, $auto);
 
+            $seenForeignKeys = [];
+
             foreach ($definition['foreign_keys'] as $foreignKey) {
+                $signature = $this->foreignKeySignature($foreignKey);
+
+                if ($signature === null || isset($seenForeignKeys[$signature])) {
+                    continue;
+                }
+
+                $seenForeignKeys[$signature] = true;
+
                 if ($this->foreignKeyCanBeCreated($destination, $table, $foreignKey, $created)) {
                     $this->applyForeignKey($blueprint, $foreignKey);
                 }
@@ -178,10 +188,19 @@ final class SchemaSynchronizer
         $driver = DB::connection($destination)->getDriverName();
         $pending = [];
 
+        $seenForeignKeys = [];
+
         foreach ($foreignKeys as $foreignKey) {
             $columns = array_values($foreignKey['columns'] ?? []);
+            $signature = $this->foreignKeySignature($foreignKey);
 
-            if ($columns === [] || $this->foreignKeyExists($destination, $table, $columns)) {
+            if ($columns === [] || $signature === null || isset($seenForeignKeys[$signature])) {
+                continue;
+            }
+
+            $seenForeignKeys[$signature] = true;
+
+            if ($this->foreignKeyExists($destination, $table, $columns)) {
                 continue;
             }
 
@@ -212,18 +231,30 @@ final class SchemaSynchronizer
             return [];
         }
 
-        Schema::connection($destination)->table($table, function (Blueprint $blueprint) use ($pending): void {
-            foreach ($pending as $foreignKey) {
-                $this->applyForeignKey($blueprint, $foreignKey);
-            }
-        });
-
         $added = [];
 
         foreach ($pending as $foreignKey) {
             $columns = implode(',', $foreignKey['columns'] ?? []);
             $target = TableName::bare((string) ($foreignKey['foreign_table'] ?? ''));
-            $added[] = "{$table}({$columns}) -> {$target}";
+            $label = "{$table}({$columns}) -> {$target}";
+
+            try {
+                Schema::connection($destination)->table($table, function (Blueprint $blueprint) use ($foreignKey): void {
+                    $this->applyForeignKey($blueprint, $foreignKey);
+                });
+            } catch (Throwable $exception) {
+                if ($this->isAlreadyDefined($exception)) {
+                    Log::warning('[nyk-db-sync] Foreign key already exists and was left in place', [
+                        'foreign_key' => $label,
+                    ]);
+
+                    continue;
+                }
+
+                throw $exception;
+            }
+
+            $added[] = $label;
         }
 
         return $added;
@@ -358,11 +389,112 @@ final class SchemaSynchronizer
      */
     private function foreignKeyExists(string $destination, string $table, array $columns): bool
     {
+        $expected = $this->normalizedColumns($columns);
+        $name = $this->foreignKeyName($table, $columns);
+
         try {
-            return Schema::connection($destination)->hasForeignKey($table, $columns);
+            foreach (Schema::connection($destination)->getForeignKeys($table) as $existing) {
+                $have = $this->normalizedColumns($existing['columns'] ?? []);
+
+                if ($have === $expected || (string) ($existing['name'] ?? '') === $name) {
+                    return true;
+                }
+            }
+        } catch (Throwable $exception) {
+            Log::warning('[nyk-db-sync] Could not list foreign keys before adding one', [
+                'table' => $table,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        return $this->constraintNameExists($destination, $table, $name);
+    }
+
+    /**
+     * @param  list<string>  $columns
+     * @return list<string>
+     */
+    private function normalizedColumns(array $columns): array
+    {
+        $columns = array_map(static fn (mixed $column): string => (string) $column, array_values($columns));
+        sort($columns);
+
+        return $columns;
+    }
+
+    /**
+     * @param  list<string>  $columns
+     */
+    private function foreignKeyName(string $table, array $columns): string
+    {
+        return str_replace(['-', '.'], '_', strtolower($table.'_'.implode('_', $columns).'_foreign'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $foreignKey
+     */
+    private function foreignKeySignature(array $foreignKey): ?string
+    {
+        $columns = $this->normalizedColumns(array_values($foreignKey['columns'] ?? []));
+        $references = $this->normalizedColumns(array_values($foreignKey['foreign_columns'] ?? []));
+        $on = TableName::bare((string) ($foreignKey['foreign_table'] ?? ''));
+
+        if ($columns === [] || $references === [] || $on === '') {
+            return null;
+        }
+
+        return implode(',', $columns).'->'.$on.'('.implode(',', $references).')';
+    }
+
+    private function constraintNameExists(string $destination, string $table, string $name): bool
+    {
+        try {
+            $connection = DB::connection($destination);
+            $driver = $connection->getDriverName();
+
+            if (! in_array($driver, ['pgsql', 'mysql', 'mariadb'], true)) {
+                return false;
+            }
+
+            $schema = $driver === 'pgsql'
+                ? (string) ($connection->selectOne('select current_schema() as schema')->schema ?? 'public')
+                : $connection->getDatabaseName();
+
+            $row = $connection->selectOne(
+                'select constraint_name from information_schema.table_constraints where table_schema = ? and table_name = ? and constraint_name = ? limit 1',
+                [$schema, $table, $name],
+            );
+
+            return $row !== null;
         } catch (Throwable) {
             return false;
         }
+    }
+
+    private function isAlreadyDefined(Throwable $exception): bool
+    {
+        $current = $exception;
+
+        while ($current !== null) {
+            $code = (string) $current->getCode();
+
+            if (in_array($code, ['42710', '42P07', '42701'], true)) {
+                return true;
+            }
+
+            $message = $current->getMessage();
+
+            if (str_contains($message, 'already exists')
+                || str_contains($message, 'Duplicate foreign key')
+                || str_contains($message, 'Duplicate key name')
+                || str_contains($message, 'Duplicate column name')) {
+                return true;
+            }
+
+            $current = $current->getPrevious();
+        }
+
+        return false;
     }
 
     /**
