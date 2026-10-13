@@ -80,6 +80,18 @@ class ColumnTypeMapperTest extends TestCase
         $this->assertSame('timestamp', $timestamp['method']);
         $this->assertTrue($timestamp['use_current']);
 
+        $zeroDate = $mapper->map([
+            'name' => 'updated_at',
+            'type' => 'timestamp',
+            'type_name' => 'timestamp',
+            'nullable' => false,
+            'default' => '0000-00-00 00:00:00',
+        ]);
+        $this->assertSame('timestamp', $zeroDate['method']);
+        $this->assertFalse($zeroDate['has_default']);
+        $this->assertTrue($zeroDate['nullable']);
+        $this->assertNotEmpty($zeroDate['warnings']);
+
         $varying = $mapper->map([
             'name' => 'code',
             'type' => 'character varying(32)',

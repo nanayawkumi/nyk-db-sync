@@ -163,7 +163,7 @@ The page shows whether each database accepted a connection, how many rows are al
 
 Translated: integers, booleans, decimals, strings, text, json, uuid, dates, times, inline enums, and indexes.
 
-Left unchanged: views, triggers, stored procedures, generated columns, native Postgres enums, MySQL `SET`, and existing column types. `0000-00-00` values become null. Postgres arrays are stored as json.
+Left unchanged: views, triggers, stored procedures, generated columns, native Postgres enums, MySQL `SET`, and existing column types. A `0000-00-00` value or column default becomes null, and that column is created nullable. Postgres arrays are stored as json.
 
 The database user has to own the tables so foreign keys can be removed and restored during the copy.
 

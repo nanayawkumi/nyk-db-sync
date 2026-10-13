@@ -41,13 +41,21 @@ final class ColumnTypeMapper
         [$method, $parameters, $unsigned, $warnings] = $this->resolve($name, $raw, $clean, $typeName, $unsigned, $auto);
 
         $parsed = $this->parseDefault($column['default'] ?? null, $method);
+        $nullable = $auto ? false : (bool) ($column['nullable'] ?? false);
+
+        if ($parsed['has_default'] && $this->isTemporal($method) && $this->isZeroDate($parsed['default'])) {
+            $parsed['has_default'] = false;
+            $parsed['default'] = null;
+            $parsed['warnings'][] = "Replaced zero-date default on [{$name}] with null.";
+            $nullable = true;
+        }
 
         $comment = $column['comment'] ?? null;
 
         return [
             'method' => $method,
             'parameters' => $parameters,
-            'nullable' => $auto ? false : (bool) ($column['nullable'] ?? false),
+            'nullable' => $nullable,
             'default' => $parsed['default'],
             'has_default' => $parsed['has_default'] && ! $auto,
             'use_current' => $parsed['use_current'] && ! $auto,
@@ -314,6 +322,16 @@ final class ColumnTypeMapper
             'use_current' => false,
             'warnings' => [],
         ];
+    }
+
+    private function isTemporal(string $method): bool
+    {
+        return in_array($method, ['date', 'dateTime', 'dateTimeTz', 'timestamp', 'timestampTz', 'time', 'timeTz'], true);
+    }
+
+    private function isZeroDate(mixed $value): bool
+    {
+        return is_string($value) && preg_match('/^0000-00-00(?:\s+00:00:00(?:\.\d+)?)?$/', $value) === 1;
     }
 
     private function stripCasts(string $value): string
