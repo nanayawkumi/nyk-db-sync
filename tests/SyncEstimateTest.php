@@ -38,4 +38,18 @@ class SyncEstimateTest extends TestCase
         $this->assertStringContainsString('500,000 rows across 2 tables.', $estimate['label']);
         $this->assertStringContainsString('Estimated', $estimate['label']);
     }
+
+    public function test_it_counts_rows_copied_and_rows_still_missing(): void
+    {
+        $progress = (new SyncEstimate())->copyProgress([
+            ['source' => 10, 'destination' => 4],
+            ['source' => 5, 'destination' => null],
+            ['source' => 8, 'destination' => 12],
+        ]);
+
+        $this->assertSame(12, $progress['copied']);
+        $this->assertSame(11, $progress['left']);
+        $this->assertSame(23, $progress['source']);
+        $this->assertSame(52, $progress['percent']);
+    }
 }

@@ -72,6 +72,9 @@ final class DatabaseSyncController
             'summary' => $summary,
             'lastDuration' => $lastDuration,
             'estimate' => $sync->estimate(null, $reachable ? $counts : null),
+            'progress' => array_merge((new SyncEstimate())->copyProgress($counts), [
+                'known' => $reachable,
+            ]),
             'counts' => $counts,
             'alignment' => $reachable ? $sync->misalignedReason(0, $counts) : 'Secondary database is unreachable.',
             'reachable' => $reachable,

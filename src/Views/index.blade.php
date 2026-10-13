@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Database sync</title>
     <style>
-        body { margin: 0; background: #f6f4ef; }
+        body { margin: 0; background: #d5e0ec; }
     </style>
 </head>
 <body>

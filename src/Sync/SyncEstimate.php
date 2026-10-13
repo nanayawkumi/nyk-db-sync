@@ -72,6 +72,40 @@ final class SyncEstimate
         return $this->phrase(max(0, $seconds));
     }
 
+    /**
+     * @param  list<array{source?: int, destination?: int|null}>  $counts
+     * @return array{source: int, copied: int, left: int, percent: int}
+     */
+    public function copyProgress(array $counts): array
+    {
+        $source = 0;
+        $copied = 0;
+        $left = 0;
+
+        foreach ($counts as $row) {
+            $rowSource = max(0, (int) ($row['source'] ?? 0));
+            $source += $rowSource;
+            $destination = $row['destination'] ?? null;
+
+            if ($destination === null) {
+                $left += $rowSource;
+
+                continue;
+            }
+
+            $destination = max(0, (int) $destination);
+            $copied += min($rowSource, $destination);
+            $left += max(0, $rowSource - $destination);
+        }
+
+        return [
+            'source' => $source,
+            'copied' => $copied,
+            'left' => $left,
+            'percent' => $source === 0 ? 100 : (int) min(100, round($copied / $source * 100)),
+        ];
+    }
+
     private function span(float $minSeconds, float $maxSeconds): string
     {
         $min = $this->phrase($minSeconds);

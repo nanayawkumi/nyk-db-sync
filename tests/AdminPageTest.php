@@ -28,6 +28,8 @@ class AdminPageTest extends TestCase
             ->assertSee('Connected')
             ->assertSee('1 row')
             ->assertSee('Estimated')
+            ->assertSee('0 copied')
+            ->assertSee('1 left')
             ->assertDontSee('Not connected');
 
         $this->from('/nyk-db-sync')->post('/nyk-db-sync/sync')->assertRedirect('/nyk-db-sync');
