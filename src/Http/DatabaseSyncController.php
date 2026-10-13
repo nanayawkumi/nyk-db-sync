@@ -12,27 +12,71 @@ use Nanayawkumi\NykDbSync\Cutover\DatabaseEngineSwitcher;
 use Nanayawkumi\NykDbSync\DualWrite;
 use Nanayawkumi\NykDbSync\Support\SummaryStore;
 use Nanayawkumi\NykDbSync\Sync\SecondaryDatabaseSyncService;
+use Nanayawkumi\NykDbSync\Sync\SyncEstimate;
 use Throwable;
 
 final class DatabaseSyncController
 {
     public function index(DualWrite $dualWrite, SecondaryDatabaseSyncService $sync, SummaryStore $summaries, DatabaseEngineSwitcher $switcher): View
     {
+        $data = $this->pageData($dualWrite, $sync, $summaries, $switcher);
+        $component = $this->configured('nyk-db-sync.ui.component');
+
+        if ($component !== null) {
+            return view('nyk-db-sync::in-component', array_merge($data, [
+                'nykLayoutComponent' => $component,
+                'standalone' => false,
+            ]));
+        }
+
+        $layout = $this->configured('nyk-db-sync.ui.layout');
+
+        if ($layout !== null) {
+            return view('nyk-db-sync::embedded', array_merge($data, [
+                'nykLayout' => $layout,
+                'nykSection' => $this->configured('nyk-db-sync.ui.section') ?? 'content',
+                'standalone' => false,
+            ]));
+        }
+
+        return view('nyk-db-sync::index', array_merge($data, [
+            'standalone' => true,
+        ]));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function pageData(DualWrite $dualWrite, SecondaryDatabaseSyncService $sync, SummaryStore $summaries, DatabaseEngineSwitcher $switcher): array
+    {
         $this->assertAllowed();
 
-        $reachable = $sync->secondaryIsReachable();
+        $primary = $dualWrite->primaryConnection();
+        $secondary = $dualWrite->secondaryConnection();
+        $connections = [
+            array_merge($sync->probe($primary), ['role' => 'Primary']),
+            array_merge($sync->probe($secondary), ['role' => 'Secondary']),
+        ];
+        $reachable = $connections[1]['connected'];
         $counts = $reachable ? $sync->compareCounts() : [];
+        $summary = $summaries->get();
+        $lastDuration = is_array($summary) && isset($summary['duration_seconds'])
+            ? (new SyncEstimate())->duration((float) $summary['duration_seconds'])
+            : null;
 
-        return view('nyk-db-sync::index', [
-            'primary' => $dualWrite->primaryConnection(),
-            'secondary' => $dualWrite->secondaryConnection(),
+        return [
+            'primary' => $primary,
+            'secondary' => $secondary,
+            'connections' => $connections,
             'enabled' => $dualWrite->enabled(),
-            'summary' => $summaries->get(),
+            'summary' => $summary,
+            'lastDuration' => $lastDuration,
+            'estimate' => $sync->estimate(null, $reachable ? $counts : null),
             'counts' => $counts,
             'alignment' => $reachable ? $sync->misalignedReason(0, $counts) : 'Secondary database is unreachable.',
             'reachable' => $reachable,
             'engines' => $switcher->engines(),
-        ]);
+        ];
     }
 
     public function sync(Request $request, SecondaryDatabaseSyncService $sync): RedirectResponse
@@ -90,5 +134,12 @@ final class DatabaseSyncController
         if (is_string($ability) && $ability !== '') {
             abort_unless(Gate::allows($ability), 403);
         }
+    }
+
+    private function configured(string $key): ?string
+    {
+        $value = config($key);
+
+        return is_string($value) && $value !== '' ? $value : null;
     }
 }

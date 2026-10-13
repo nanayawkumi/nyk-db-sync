@@ -19,7 +19,9 @@ class SyncCommandTest extends TestCase
 
         $this->artisan('nyk-db-sync:sync')
             ->assertSuccessful()
-            ->expectsOutputToContain('Copied sqlite → sqlite_secondary');
+            ->expectsOutputToContain('1 row')
+            ->expectsOutputToContain('Copied sqlite → sqlite_secondary')
+            ->expectsOutputToContain('Finished in');
 
         $this->artisan('nyk-db-sync:sync', ['--table' => 'not_a_real_table'])
             ->assertFailed()

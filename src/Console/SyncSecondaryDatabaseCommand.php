@@ -7,6 +7,7 @@ namespace Nanayawkumi\NykDbSync\Console;
 use Illuminate\Console\Command;
 use InvalidArgumentException;
 use Nanayawkumi\NykDbSync\Sync\SecondaryDatabaseSyncService;
+use Nanayawkumi\NykDbSync\Sync\SyncEstimate;
 use Throwable;
 
 class SyncSecondaryDatabaseCommand extends Command
@@ -34,6 +35,15 @@ class SyncSecondaryDatabaseCommand extends Command
         $table = is_string($table) && $table !== '' ? $table : null;
 
         try {
+            if (! $schemaOnly) {
+                $estimate = $sync->estimate($table);
+                $this->info($estimate['label']);
+
+                if ($estimate['note'] !== '') {
+                    $this->line($estimate['note']);
+                }
+            }
+
             $summary = $sync->sync(
                 $table,
                 (int) $this->option('chunk'),
@@ -53,6 +63,10 @@ class SyncSecondaryDatabaseCommand extends Command
         }
 
         $this->info("Copied {$summary['primary']} → {$summary['secondary']} at {$summary['ran_at']}");
+
+        if (isset($summary['duration_seconds'])) {
+            $this->info('Finished in '.(new SyncEstimate())->duration((float) $summary['duration_seconds']).'.');
+        }
 
         if (($summary['migrations_copied'] ?? 0) > 0) {
             $this->line('Migration repository rows copied: '.$summary['migrations_copied']);

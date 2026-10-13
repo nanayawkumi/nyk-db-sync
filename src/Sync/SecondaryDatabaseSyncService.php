@@ -49,6 +49,7 @@ final class SecondaryDatabaseSyncService
 
         $chunk = max(1, $chunk);
         $tables = $this->tablesFor($primary, $onlyTable);
+        $started = hrtime(true);
         $schemaSummary = [
             'created' => [],
             'columns_added' => [],
@@ -89,9 +90,40 @@ final class SecondaryDatabaseSyncService
 
         $this->repairPostgresSequences($secondary, $copiedTables);
         $this->repairPostgresSequences($primary, $copiedTables);
+        $summary['rows_copied'] = (int) array_sum(array_column($summary['tables'], 'copied')) + (int) $summary['migrations_copied'];
+        $summary['duration_seconds'] = round((hrtime(true) - $started) / 1e9, 3);
         $this->summaries->put($summary);
 
         return $summary;
+    }
+
+    /**
+     * @param  list<array{table: string, source: int, destination?: int|null, delta?: int}>|null  $counts
+     * @return array{rows: int, tables: int, label: string, note: string, basis: string}
+     */
+    public function estimate(?string $onlyTable = null, ?array $counts = null): array
+    {
+        $primary = $this->dualWrite->primaryConnection();
+        $counts ??= $this->sourceCounts($primary, $onlyTable);
+        $previous = $this->summaries->get();
+        $rate = null;
+
+        if (is_array($previous)) {
+            $copied = (int) ($previous['rows_copied'] ?? 0);
+            $seconds = (float) ($previous['duration_seconds'] ?? 0);
+
+            if ($copied >= 50 && $seconds >= 1) {
+                $rate = $copied / $seconds;
+            }
+        }
+
+        $sample = null;
+
+        if ($rate === null) {
+            $sample = $this->sampleReadRate($primary, $counts);
+        }
+
+        return (new SyncEstimate())->build($counts, $rate, $sample);
     }
 
     /**
@@ -149,18 +181,47 @@ final class SecondaryDatabaseSyncService
 
     public function secondaryIsReachable(): bool
     {
-        $secondary = $this->dualWrite->secondaryConnection();
+        return $this->probe($this->dualWrite->secondaryConnection())['connected'];
+    }
 
-        if ($secondary === null) {
-            return false;
+    /**
+     * @return array{name: string, connected: bool, driver: string|null, database: string|null, error: string|null}
+     */
+    public function probe(?string $name): array
+    {
+        if ($name === null || $name === '') {
+            return [
+                'name' => '',
+                'connected' => false,
+                'driver' => null,
+                'database' => null,
+                'error' => 'Not configured',
+            ];
         }
 
-        try {
-            DB::connection($secondary)->getPdo();
+        $configuredDatabase = config("database.connections.{$name}.database");
+        $configuredDriver = config("database.connections.{$name}.driver");
 
-            return true;
-        } catch (Throwable) {
-            return false;
+        try {
+            $connection = DB::connection($name);
+            $connection->getPdo();
+            $database = $connection->getDatabaseName();
+
+            return [
+                'name' => $name,
+                'connected' => true,
+                'driver' => $connection->getDriverName(),
+                'database' => $database !== '' ? $database : null,
+                'error' => null,
+            ];
+        } catch (Throwable $exception) {
+            return [
+                'name' => $name,
+                'connected' => false,
+                'driver' => is_string($configuredDriver) ? $configuredDriver : null,
+                'database' => is_string($configuredDatabase) && $configuredDatabase !== '' ? $configuredDatabase : null,
+                'error' => $exception->getMessage(),
+            ];
         }
     }
 
@@ -185,6 +246,69 @@ final class SecondaryDatabaseSyncService
         }
 
         return null;
+    }
+
+    /**
+     * @return list<array{table: string, source: int}>
+     */
+    private function sourceCounts(string $primary, ?string $onlyTable): array
+    {
+        $rows = [];
+
+        foreach ($this->tablesFor($primary, $onlyTable) as $table) {
+            if (! Schema::connection($primary)->hasTable($table)) {
+                continue;
+            }
+
+            try {
+                $rows[] = [
+                    'table' => $table,
+                    'source' => (int) DB::connection($primary)->table($table)->count(),
+                ];
+            } catch (Throwable) {
+                continue;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param  list<array{table?: string, source: int}>  $counts
+     */
+    private function sampleReadRate(string $primary, array $counts): ?float
+    {
+        $table = null;
+        $largest = 0;
+
+        foreach ($counts as $row) {
+            $source = (int) ($row['source'] ?? 0);
+
+            if ($source > $largest && isset($row['table']) && is_string($row['table'])) {
+                $largest = $source;
+                $table = $row['table'];
+            }
+        }
+
+        if ($table === null || ! TableName::isSafe($table)) {
+            return null;
+        }
+
+        $started = hrtime(true);
+
+        try {
+            $read = DB::connection($primary)->table($table)->limit(100)->get()->count();
+        } catch (Throwable) {
+            return null;
+        }
+
+        $seconds = (hrtime(true) - $started) / 1e9;
+
+        if ($read === 0 || $seconds < 0.01) {
+            return null;
+        }
+
+        return $read / $seconds;
     }
 
     /**

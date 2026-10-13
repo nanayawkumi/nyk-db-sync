@@ -6,9 +6,11 @@ namespace Nanayawkumi\NykDbSync;
 
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Nanayawkumi\NykDbSync\View\Components\Panel;
 use Nanayawkumi\NykDbSync\Console\RepairPostgresSequencesCommand;
 use Nanayawkumi\NykDbSync\Console\SyncSecondaryDatabaseCommand;
 use Nanayawkumi\NykDbSync\Database\DualWriteMariaDbConnection;
@@ -52,6 +54,7 @@ final class NykDbSyncServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadViewsFrom(__DIR__.'/Views', 'nyk-db-sync');
+        Blade::component('nyk-db-sync', Panel::class);
         $this->registerObservers();
 
         if ($this->app->runningInConsole()) {

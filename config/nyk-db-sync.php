@@ -122,6 +122,21 @@ return [
         'path' => env('NYK_DB_SYNC_PATH', 'nyk-db-sync'),
         'middleware' => ['web', 'auth'],
         'gate' => null,
+
+        /*
+        | Leave layout empty for a standalone page. Set it to the host view
+        | that wraps the admin area, and section to that view's @yield name,
+        | so the sync UI fills the content area beside an existing sidebar.
+        |
+        | component is the alternative for <x-app-layout> style shells. Set
+        | layout or component, not both. The same UI can also be placed on
+        | any existing page with <x-nyk-db-sync />.
+        |
+        */
+
+        'layout' => env('NYK_DB_SYNC_LAYOUT'),
+        'section' => env('NYK_DB_SYNC_SECTION', 'content'),
+        'component' => env('NYK_DB_SYNC_COMPONENT'),
     ],
 
 ];
