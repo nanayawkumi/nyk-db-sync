@@ -100,6 +100,8 @@ A sync sets each Postgres `id` sequence to `MAX(id)` on both connections. Insert
 
 Tables that only exist on the secondary are left alone. Columns that already exist are not altered. New columns are added. Foreign keys are created with the table when the referenced table already exists. Running the sync again upserts rows and skips a foreign key that is already on the table, so Postgres error `42710` (constraint already exists) does not stop the copy.
 
+On Postgres, those foreign keys are removed for the copy and put back when it finishes. That lets a row land before its parent, and it does not depend on permission to set `session_replication_role`. If a copied row points at a parent that is not in the source, the constraint is restored as `NOT VALID` and the missing key is written to the log.
+
 ## Dual-write
 
 ```dotenv
