@@ -251,6 +251,12 @@ final class SchemaSynchronizer
                     continue;
                 }
 
+                if ($driver === 'pgsql' && $this->addForeignKeyWithoutCheckingRows($destination, $table, $foreignKey, $label, $exception)) {
+                    $added[] = $label;
+
+                    continue;
+                }
+
                 throw $exception;
             }
 
@@ -469,6 +475,54 @@ final class SchemaSynchronizer
         } catch (Throwable) {
             return false;
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $foreignKey
+     */
+    private function addForeignKeyWithoutCheckingRows(string $destination, string $table, array $foreignKey, string $label, Throwable $exception): bool
+    {
+        $postgres = new PostgresForeignKey();
+
+        if (! $postgres->isViolation($exception)) {
+            return false;
+        }
+
+        $columns = array_values($foreignKey['columns'] ?? []);
+        $sql = $postgres->notValidStatement(
+            $table,
+            $this->foreignKeyName($table, $columns),
+            $columns,
+            TableName::bare((string) ($foreignKey['foreign_table'] ?? '')),
+            array_values($foreignKey['foreign_columns'] ?? []),
+            (string) ($foreignKey['on_delete'] ?? ''),
+            (string) ($foreignKey['on_update'] ?? ''),
+        );
+
+        if ($sql === null) {
+            return false;
+        }
+
+        try {
+            DB::connection($destination)->unprepared($sql);
+        } catch (Throwable $retry) {
+            if ($this->isAlreadyDefined($retry)) {
+                Log::warning('[nyk-db-sync] Foreign key already exists and was left in place', [
+                    'foreign_key' => $label,
+                ]);
+
+                return true;
+            }
+
+            throw $retry;
+        }
+
+        Log::warning('[nyk-db-sync] Foreign key was added without checking existing rows because a parent is missing', [
+            'foreign_key' => $label,
+            'error' => $exception->getMessage(),
+        ]);
+
+        return true;
     }
 
     private function isAlreadyDefined(Throwable $exception): bool
