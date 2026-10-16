@@ -52,7 +52,9 @@
         .nyk-db-sync th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
         .nyk-db-sync th, .nyk-db-sync td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid #e8f0f6; }
         .nyk-db-sync label { display: block; font-size: 0.92rem; margin: 10px 0; color: var(--ink); }
-        .nyk-db-sync select, .nyk-db-sync input[type="text"] { width: 100%; max-width: 320px; padding: 8px 10px; border: 1px solid #c5d5e4; border-radius: 10px; background: #fff; color: var(--ink); }
+        .nyk-db-sync select, .nyk-db-sync input[type="text"], .nyk-db-sync input[type="password"], .nyk-db-sync input[type="number"] { width: 100%; max-width: 320px; padding: 8px 10px; border: 1px solid #c5d5e4; border-radius: 10px; background: #fff; color: var(--ink); }
+        .nyk-db-sync .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; }
+        .nyk-db-sync .fields input { max-width: none; }
         .nyk-db-sync button { background: var(--amber); color: white; border: 0; border-radius: 10px; padding: 9px 14px; font-weight: 700; cursor: pointer; }
         .nyk-db-sync button.secondary { background: var(--teal); }
         .nyk-db-sync button:disabled { background: #b7c6d4; cursor: not-allowed; }
@@ -102,6 +104,60 @@
                 Row counts are close enough to switch.
             @endif
         </p>
+    </section>
+
+    <section class="panel">
+        <h2>Create Postgres database</h2>
+        <p class="muted">Connects as the local <code>postgres</code> superuser, creates the empty database and app login, grants <code>CONNECT</code> plus <code>USAGE</code> and <code>CREATE</code> on schema <code>public</code>, and overwrites <code>PGSQL_HOST</code>, <code>PGSQL_PORT</code>, <code>PGSQL_DATABASE</code>, <code>PGSQL_USERNAME</code>, and <code>PGSQL_PASSWORD</code>.</p>
+        <form method="post" action="{{ route('nyk-db-sync.create-database') }}">
+            @csrf
+            <div class="fields">
+                <label>
+                    Host
+                    <input type="text" name="host" value="{{ old('host', '127.0.0.1') }}" autocomplete="off">
+                </label>
+                <label>
+                    Port
+                    <input type="number" name="port" value="{{ old('port', '5432') }}" min="1" max="65535">
+                </label>
+                <label>
+                    Database name
+                    <input type="text" name="database" value="{{ old('database') }}" autocomplete="off">
+                </label>
+                <label>
+                    App login
+                    <input type="text" name="username" value="{{ old('username') }}" autocomplete="off">
+                </label>
+                <label>
+                    App login password
+                    <input type="password" name="password" autocomplete="new-password">
+                </label>
+                <label class="check">
+                    <input type="checkbox" name="generate_password" value="1" @checked(old('generate_password'))>
+                    Generate a password
+                </label>
+                <label>
+                    Postgres superuser password
+                    <input type="password" name="admin_password" autocomplete="new-password" placeholder="empty for local trust auth">
+                </label>
+            </div>
+            <button class="secondary" type="submit">Create database</button>
+        </form>
+        <script>
+            (function () {
+                var form = document.currentScript && document.currentScript.previousElementSibling;
+                if (!form) return;
+                var toggle = form.querySelector('input[name="generate_password"]');
+                var password = form.querySelector('input[name="password"]');
+                if (!toggle || !password) return;
+                var apply = function () {
+                    password.disabled = toggle.checked;
+                    if (toggle.checked) password.value = '';
+                };
+                toggle.addEventListener('change', apply);
+                apply();
+            }());
+        </script>
     </section>
 
     <section class="panel">

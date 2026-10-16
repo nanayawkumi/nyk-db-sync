@@ -7,9 +7,11 @@ namespace Nanayawkumi\NykDbSync\Http;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use Nanayawkumi\NykDbSync\Cutover\DatabaseEngineSwitcher;
 use Nanayawkumi\NykDbSync\DualWrite;
+use Nanayawkumi\NykDbSync\Postgres\PostgresDatabaseSetup;
 use Nanayawkumi\NykDbSync\Support\SummaryStore;
 use Nanayawkumi\NykDbSync\Sync\SecondaryDatabaseSyncService;
 use Nanayawkumi\NykDbSync\Sync\SyncEstimate;
@@ -119,6 +121,53 @@ final class DatabaseSyncController
         $result = $switcher->switchTo($data['engine'], $request->boolean('keep_dual_write'));
 
         return back()->with($result['ok'] ? 'status' : 'error', $result['message']);
+    }
+
+    public function createDatabase(Request $request, PostgresDatabaseSetup $setup): RedirectResponse
+    {
+        $this->assertAllowed();
+
+        try {
+            $data = $request->validate([
+                'host' => ['required', 'string', 'regex:/^[A-Za-z0-9._-]+$/'],
+                'port' => ['required', 'integer', 'min:1', 'max:65535'],
+                'database' => ['required', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
+                'username' => ['required', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
+                'password' => ['required_unless:generate_password,1', 'nullable', 'string'],
+                'generate_password' => ['nullable', 'boolean'],
+                'admin_password' => ['nullable', 'string'],
+            ]);
+        } catch (ValidationException $exception) {
+            return back()
+                ->withInput($request->except(['password', 'admin_password']))
+                ->withErrors($exception->errors());
+        }
+
+        $generated = $request->boolean('generate_password');
+        $password = $generated ? $setup->generatePassword() : (string) $data['password'];
+
+        try {
+            $setup->install(
+                $data['host'],
+                (string) $data['port'],
+                $data['database'],
+                $data['username'],
+                $password,
+                (string) ($data['admin_password'] ?? ''),
+            );
+        } catch (Throwable $exception) {
+            return back()
+                ->withInput($request->except(['password', 'admin_password']))
+                ->with('error', $exception->getMessage());
+        }
+
+        $status = "Postgres database [{$data['database']}] is ready for login [{$data['username']}]. Wrote PGSQL_HOST, PGSQL_PORT, PGSQL_DATABASE, PGSQL_USERNAME, and PGSQL_PASSWORD.";
+
+        if ($generated) {
+            $status .= ' Generated password: '.$password;
+        }
+
+        return back()->with('status', $status);
     }
 
     public function repairSequences(DatabaseEngineSwitcher $switcher): RedirectResponse

@@ -10,6 +10,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\View;
+use Nanayawkumi\NykDbSync\Postgres\PostgresSession;
+use Nanayawkumi\NykDbSync\Postgres\PostgresSessionFactory;
+use Nanayawkumi\NykDbSync\Tests\Fixtures\FakePostgresSession;
 use Nanayawkumi\NykDbSync\Tests\Fixtures\HostShell;
 
 class AdminPageTest extends TestCase
@@ -31,6 +34,8 @@ class AdminPageTest extends TestCase
             ->assertSee('0 copied')
             ->assertSee('1 left')
             ->assertSee('0%')
+            ->assertSee('Create Postgres database')
+            ->assertSee('Generate a password')
             ->assertDontSee('Not connected');
 
         $this->from('/nyk-db-sync')->post('/nyk-db-sync/sync')->assertRedirect('/nyk-db-sync');
@@ -94,6 +99,94 @@ class AdminPageTest extends TestCase
         $this->from('/nyk-db-sync')
             ->post('/nyk-db-sync/switch', ['engine' => 'pgsql'])
             ->assertSessionHasErrors('confirmed');
+    }
+
+    public function test_the_page_creates_a_postgres_database_and_writes_env(): void
+    {
+        $path = sys_get_temp_dir().'/nyk-db-sync-'.uniqid('', true);
+        file_put_contents($path, "DB_CONNECTION=mysql\nPGSQL_HOST=old\n");
+        config(['nyk-db-sync.dotenv_path' => $path]);
+
+        $this->app->instance(PostgresSessionFactory::class, new class(new FakePostgresSession()) implements PostgresSessionFactory
+        {
+            public function __construct(private PostgresSession $session) {}
+
+            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            {
+                return $this->session;
+            }
+        });
+
+        try {
+            $this->from('/nyk-db-sync')
+                ->post('/nyk-db-sync/create-database', [
+                    'host' => '127.0.0.1',
+                    'port' => '5432',
+                    'database' => 'geonet',
+                    'username' => 'geonet_app',
+                    'password' => 'secret',
+                    'admin_password' => '',
+                ])
+                ->assertRedirect('/nyk-db-sync')
+                ->assertSessionHas('status');
+
+            $contents = (string) file_get_contents($path);
+
+            $this->assertStringContainsString('DB_CONNECTION=mysql', $contents);
+            $this->assertStringContainsString('PGSQL_DATABASE=geonet', $contents);
+            $this->assertStringContainsString('PGSQL_USERNAME=geonet_app', $contents);
+            $this->assertStringContainsString('PGSQL_PASSWORD=secret', $contents);
+            $this->assertStringNotContainsString('PGSQL_HOST=old', $contents);
+        } finally {
+            foreach (glob($path.'.bak.*') ?: [] as $backup) {
+                @unlink($backup);
+            }
+
+            @unlink($path);
+        }
+    }
+
+    public function test_the_page_can_generate_the_login_password(): void
+    {
+        $path = sys_get_temp_dir().'/nyk-db-sync-'.uniqid('', true);
+        file_put_contents($path, "DB_CONNECTION=mysql\n");
+        config(['nyk-db-sync.dotenv_path' => $path]);
+
+        $this->app->instance(PostgresSessionFactory::class, new class(new FakePostgresSession()) implements PostgresSessionFactory
+        {
+            public function __construct(private PostgresSession $session) {}
+
+            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            {
+                return $this->session;
+            }
+        });
+
+        try {
+            $this->from('/nyk-db-sync')
+                ->post('/nyk-db-sync/create-database', [
+                    'host' => '127.0.0.1',
+                    'port' => '5432',
+                    'database' => 'geonet',
+                    'username' => 'geonet_app',
+                    'generate_password' => '1',
+                    'admin_password' => '',
+                ])
+                ->assertRedirect('/nyk-db-sync')
+                ->assertSessionHas('status');
+
+            $status = (string) session('status');
+            $contents = (string) file_get_contents($path);
+
+            $this->assertStringContainsString('Generated password:', $status);
+            $this->assertMatchesRegularExpression('/^PGSQL_PASSWORD=.+$/m', $contents);
+        } finally {
+            foreach (glob($path.'.bak.*') ?: [] as $backup) {
+                @unlink($backup);
+            }
+
+            @unlink($path);
+        }
     }
 
     public function test_repair_sequences_reports_the_postgres_side(): void

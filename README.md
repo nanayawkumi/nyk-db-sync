@@ -70,7 +70,17 @@ PGSQL_USERNAME=postgres
 PGSQL_PASSWORD=
 ```
 
-`PGSQL_USERNAME` is the variable name. Create that Postgres database empty before the first sync. Leave `DB_CONNECTION=mysql` so the site keeps serving MySQL until you switch it.
+`PGSQL_USERNAME` is the variable name. Leave `DB_CONNECTION=mysql` so the site keeps serving MySQL until you switch it.
+
+Create the empty Postgres database and its login with:
+
+```bash
+php artisan nyk-db-sync:create-database
+```
+
+The command asks for the database name, the app login, and that login's password. It connects as the local `postgres` superuser on `127.0.0.1` port `5432`, creates the database and the login, and grants `CONNECT` plus `USAGE` and `CREATE` on schema `public`. It overwrites `PGSQL_HOST`, `PGSQL_PORT`, `PGSQL_DATABASE`, `PGSQL_USERNAME`, and `PGSQL_PASSWORD`. The admin page has the same form.
+
+`--host`, `--port`, `--database`, `--username`, `--password`, and `--admin-password` skip the questions. `--generate-password` creates a random login password and prints it. `--admin-password` is the `postgres` superuser password. Leave it empty when local trust or peer auth is enough. An existing database is left in place. An existing login keeps its name and gets the password you typed, or the generated one. The admin form has the same generate option.
 
 On Postgres 15 and newer, the app role needs `GRANT USAGE, CREATE ON SCHEMA public`.
 
@@ -102,6 +112,24 @@ Models outside `app/Models` go in `models.extra`. `table_order` only changes ord
 ```
 
 If the process is killed, rows already committed stay on the secondary and foreign keys removed for that copy may still be off. Run the same command again, without `--no-schema`, and it continues.
+
+## Optimize
+
+Run this after the copy, or on its own. It does not run as part of `nyk-db-sync:sync`.
+
+```bash
+php artisan nyk-db-sync:optimize
+php artisan nyk-db-sync:optimize --apply
+php artisan nyk-db-sync:optimize --partition=orders:created_at:month
+```
+
+The command reads PHP under `app`, `routes`, and `database`. It looks for `where`, `orderBy`, `groupBy`, `latest`, and `oldest` on a model, and for `table.column` references. `--path` scans other directories.
+
+It recommends a Postgres index when a queried column exists and the MySQL origin does not already index it. An index Postgres already has is left out. The first run only prints the plan. `--apply` creates those indexes on Postgres with `CREATE INDEX CONCURRENTLY`. MySQL is not changed.
+
+The origin is the MySQL connection: the live database while `DB_CONNECTION=mysql`, or the MySQL secondary after you have switched to Postgres.
+
+`--partition` is `table:column:day`, `table:column:month`, or `table:column:year`. You name the table, the column, and the interval. The command prints that plan. It does not partition the table, because turning an existing table into a partitioned table rewrites it.
 
 ## Dual-write
 
@@ -157,7 +185,7 @@ Gate::define('manage-database', fn ($user): bool => $user->hasRole('SuperAdmin')
 @endcan
 ```
 
-The page shows whether each database accepted a connection, how many rows are already on the secondary, how many are left, that share as a percentage, the estimated time, and the switch form. The switch stays disabled while the secondary is down. Confirming the switch is required.
+The page shows whether each database accepted a connection, how many rows are already on the secondary, how many are left, that share as a percentage, the estimated time, the form that creates the Postgres database, and the switch form. The switch stays disabled while the secondary is down. Confirming the switch is required.
 
 ## Schema limits
 

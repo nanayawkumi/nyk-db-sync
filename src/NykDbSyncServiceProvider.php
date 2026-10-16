@@ -11,6 +11,8 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Nanayawkumi\NykDbSync\View\Components\Panel;
+use Nanayawkumi\NykDbSync\Console\CreatePostgresDatabaseCommand;
+use Nanayawkumi\NykDbSync\Console\OptimizePostgresCommand;
 use Nanayawkumi\NykDbSync\Console\RepairPostgresSequencesCommand;
 use Nanayawkumi\NykDbSync\Console\SyncSecondaryDatabaseCommand;
 use Nanayawkumi\NykDbSync\Database\DualWriteMariaDbConnection;
@@ -19,6 +21,8 @@ use Nanayawkumi\NykDbSync\Database\DualWriteObserver;
 use Nanayawkumi\NykDbSync\Database\DualWritePostgresConnection;
 use Nanayawkumi\NykDbSync\Database\DualWriteSQLiteConnection;
 use Nanayawkumi\NykDbSync\Http\DatabaseSyncController;
+use Nanayawkumi\NykDbSync\Postgres\PdoPostgresSessionFactory;
+use Nanayawkumi\NykDbSync\Postgres\PostgresSessionFactory;
 use ReflectionClass;
 
 final class NykDbSyncServiceProvider extends ServiceProvider
@@ -31,6 +35,8 @@ final class NykDbSyncServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/nyk-db-sync.php', 'nyk-db-sync');
+
+        $this->app->bind(PostgresSessionFactory::class, PdoPostgresSessionFactory::class);
 
         Connection::resolverFor('mysql', function ($connection, $database, $prefix, $config) {
             return new DualWriteMySqlConnection($connection, $database, $prefix, $config);
@@ -69,6 +75,8 @@ final class NykDbSyncServiceProvider extends ServiceProvider
             $this->commands([
                 SyncSecondaryDatabaseCommand::class,
                 RepairPostgresSequencesCommand::class,
+                CreatePostgresDatabaseCommand::class,
+                OptimizePostgresCommand::class,
             ]);
         }
 
@@ -92,6 +100,7 @@ final class NykDbSyncServiceProvider extends ServiceProvider
                 Route::post('/sync', [DatabaseSyncController::class, 'sync'])->name('sync');
                 Route::post('/switch', [DatabaseSyncController::class, 'switchEngine'])->name('switch');
                 Route::post('/repair-sequences', [DatabaseSyncController::class, 'repairSequences'])->name('repair');
+                Route::post('/create-database', [DatabaseSyncController::class, 'createDatabase'])->name('create-database');
             });
     }
 
