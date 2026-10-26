@@ -64,8 +64,14 @@ final class SchemaSynchronizer
                     }
                 }
             } catch (Throwable $exception) {
+                $message = $exception->getMessage();
+
+                if (str_contains($message, '42501') || str_contains($message, 'permission denied for schema')) {
+                    $message .= ' Run php artisan nyk-db-sync:grant to give that login USAGE and CREATE on schema public.';
+                }
+
                 throw new RuntimeException(
-                    "Could not translate [{$table}] onto [{$destination}]: {$exception->getMessage()}",
+                    "Could not translate [{$table}] onto [{$destination}]: {$message}",
                     0,
                     $exception,
                 );

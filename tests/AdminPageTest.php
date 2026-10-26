@@ -34,8 +34,9 @@ class AdminPageTest extends TestCase
             ->assertSee('0 copied')
             ->assertSee('1 left')
             ->assertSee('0%')
-            ->assertSee('Create Postgres database')
-            ->assertSee('Generate a password')
+            ->assertDontSee('Create Postgres database')
+            ->assertDontSee('Generate a password')
+            ->assertSee('Grant schema privileges')
             ->assertDontSee('Not connected');
 
         $this->from('/nyk-db-sync')->post('/nyk-db-sync/sync')->assertRedirect('/nyk-db-sync');
@@ -99,6 +100,17 @@ class AdminPageTest extends TestCase
         $this->from('/nyk-db-sync')
             ->post('/nyk-db-sync/switch', ['engine' => 'pgsql'])
             ->assertSessionHasErrors('confirmed');
+    }
+
+    public function test_the_create_form_is_shown_when_the_postgres_database_is_missing(): void
+    {
+        config(['database.connections.pgsql.database' => '']);
+
+        $this->get('/nyk-db-sync')
+            ->assertOk()
+            ->assertSee('Create Postgres database')
+            ->assertSee('Generate a password')
+            ->assertSee('Grant schema privileges');
     }
 
     public function test_the_page_creates_a_postgres_database_and_writes_env(): void
@@ -187,6 +199,39 @@ class AdminPageTest extends TestCase
 
             @unlink($path);
         }
+    }
+
+    public function test_the_page_grants_schema_privileges_to_an_existing_login(): void
+    {
+        $session = new FakePostgresSession();
+        $session->roles[] = 'app_user';
+        $session->existingDatabases[] = 'peedocastdb';
+
+        $this->app->instance(PostgresSessionFactory::class, new class($session) implements PostgresSessionFactory
+        {
+            public function __construct(private PostgresSession $session) {}
+
+            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            {
+                return $this->session;
+            }
+        });
+
+        $this->from('/nyk-db-sync')
+            ->post('/nyk-db-sync/grant', [
+                'host' => '127.0.0.1',
+                'port' => '5432',
+                'database' => 'peedocastdb',
+                'username' => 'app_user',
+                'admin_password' => '',
+            ])
+            ->assertRedirect('/nyk-db-sync')
+            ->assertSessionHas('status', 'Granted CONNECT, USAGE, and CREATE on [peedocastdb] to [app_user].');
+
+        $this->assertSame([
+            'grant connect on database "peedocastdb" to "app_user"',
+            'grant usage, create on schema public to "app_user"',
+        ], $session->statements);
     }
 
     public function test_repair_sequences_reports_the_postgres_side(): void

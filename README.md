@@ -78,11 +78,17 @@ Create the empty Postgres database and its login with:
 php artisan nyk-db-sync:create-database
 ```
 
-The command asks for the database name, the app login, and that login's password. It connects as the local `postgres` superuser on `127.0.0.1` port `5432`, creates the database and the login, and grants `CONNECT` plus `USAGE` and `CREATE` on schema `public`. It overwrites `PGSQL_HOST`, `PGSQL_PORT`, `PGSQL_DATABASE`, `PGSQL_USERNAME`, and `PGSQL_PASSWORD`. The admin page has the same form.
+The command asks for the database name, the app login, and that login's password. It connects as the local `postgres` superuser on `127.0.0.1` port `5432`, creates the database and the login, and grants `CONNECT` plus `USAGE` and `CREATE` on schema `public`. It overwrites `PGSQL_HOST`, `PGSQL_PORT`, `PGSQL_DATABASE`, `PGSQL_USERNAME`, and `PGSQL_PASSWORD`. The admin page shows that form only when the Postgres database does not exist. The grant form stays on the page either way.
 
 `--host`, `--port`, `--database`, `--username`, `--password`, and `--admin-password` skip the questions. `--generate-password` creates a random login password and prints it. `--admin-password` is the `postgres` superuser password. Leave it empty when local trust or peer auth is enough. An existing database is left in place. An existing login keeps its name and gets the password you typed, or the generated one. The admin form has the same generate option.
 
-On Postgres 15 and newer, the app role needs `GRANT USAGE, CREATE ON SCHEMA public`.
+On Postgres 15 and newer, the app role needs `GRANT USAGE, CREATE ON SCHEMA public`. If creating a table fails with `permission denied for schema public`, grant that on the existing database:
+
+```bash
+php artisan nyk-db-sync:grant
+```
+
+It uses the host, port, database, and username from the `pgsql` connection unless you pass `--host`, `--port`, `--database`, or `--username`. It connects as the local `postgres` superuser and grants `CONNECT` plus `USAGE` and `CREATE` on schema `public`. `--admin-password` is the superuser password. The admin page has the same form, filled from the `pgsql` connection.
 
 ## Sync
 

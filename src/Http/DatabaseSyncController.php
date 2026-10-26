@@ -11,7 +11,10 @@ use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use Nanayawkumi\NykDbSync\Cutover\DatabaseEngineSwitcher;
 use Nanayawkumi\NykDbSync\DualWrite;
+use Nanayawkumi\NykDbSync\Postgres\PostgresDatabaseCreator;
+use Nanayawkumi\NykDbSync\Postgres\PostgresDatabasePresence;
 use Nanayawkumi\NykDbSync\Postgres\PostgresDatabaseSetup;
+use Nanayawkumi\NykDbSync\Postgres\PostgresSessionFactory;
 use Nanayawkumi\NykDbSync\Support\SummaryStore;
 use Nanayawkumi\NykDbSync\Sync\SecondaryDatabaseSyncService;
 use Nanayawkumi\NykDbSync\Sync\SyncEstimate;
@@ -60,6 +63,7 @@ final class DatabaseSyncController
             array_merge($sync->probe($secondary), ['role' => 'Secondary']),
         ];
         $reachable = $connections[1]['connected'];
+        $pgsqlProbe = $sync->probe('pgsql');
         $counts = $reachable ? $sync->compareCounts() : [];
         $summary = $summaries->get();
         $lastDuration = is_array($summary) && isset($summary['duration_seconds'])
@@ -81,6 +85,12 @@ final class DatabaseSyncController
             'alignment' => $reachable ? $sync->misalignedReason(0, $counts) : 'Secondary database is unreachable.',
             'reachable' => $reachable,
             'engines' => $switcher->engines(),
+            'pgsql' => $this->pgsqlDefaults(),
+            'postgresDatabaseMissing' => (new PostgresDatabasePresence())->missing(
+                $pgsqlProbe['database'],
+                $pgsqlProbe['connected'],
+                $pgsqlProbe['error'],
+            ),
         ];
     }
 
@@ -170,6 +180,36 @@ final class DatabaseSyncController
         return back()->with('status', $status);
     }
 
+    public function grantPrivileges(Request $request, PostgresDatabaseCreator $creator, PostgresSessionFactory $sessions): RedirectResponse
+    {
+        $this->assertAllowed();
+
+        try {
+            $data = $request->validate([
+                'host' => ['required', 'string', 'regex:/^[A-Za-z0-9._-]+$/'],
+                'port' => ['required', 'integer', 'min:1', 'max:65535'],
+                'database' => ['required', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
+                'username' => ['required', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
+                'admin_password' => ['nullable', 'string'],
+            ]);
+        } catch (ValidationException $exception) {
+            return back()
+                ->withInput($request->except('admin_password'))
+                ->withErrors($exception->errors());
+        }
+
+        try {
+            $session = $sessions->open($data['host'], (string) $data['port'], (string) ($data['admin_password'] ?? ''));
+            $creator->grant($session, $data['database'], $data['username']);
+        } catch (Throwable $exception) {
+            return back()
+                ->withInput($request->except('admin_password'))
+                ->with('error', $exception->getMessage());
+        }
+
+        return back()->with('status', "Granted CONNECT, USAGE, and CREATE on [{$data['database']}] to [{$data['username']}].");
+    }
+
     public function repairSequences(DatabaseEngineSwitcher $switcher): RedirectResponse
     {
         $this->assertAllowed();
@@ -186,6 +226,22 @@ final class DatabaseSyncController
         if (is_string($ability) && $ability !== '') {
             abort_unless(Gate::allows($ability), 403);
         }
+    }
+
+    /**
+     * @return array{host: string, port: string, database: string, username: string}
+     */
+    private function pgsqlDefaults(): array
+    {
+        $configured = config('database.connections.pgsql');
+        $configured = is_array($configured) ? $configured : [];
+
+        return [
+            'host' => is_string($configured['host'] ?? null) && $configured['host'] !== '' ? $configured['host'] : '127.0.0.1',
+            'port' => isset($configured['port']) && (string) $configured['port'] !== '' ? (string) $configured['port'] : '5432',
+            'database' => is_string($configured['database'] ?? null) ? $configured['database'] : '',
+            'username' => is_string($configured['username'] ?? null) ? $configured['username'] : '',
+        ];
     }
 
     private function configured(string $key): ?string

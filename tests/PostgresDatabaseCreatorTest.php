@@ -40,6 +40,21 @@ class PostgresDatabaseCreatorTest extends TestCase
         ], $session->statements);
     }
 
+    public function test_it_grants_schema_privileges_to_an_existing_login(): void
+    {
+        $session = new FakePostgresSession();
+        $session->roles[] = 'app_user';
+        $session->existingDatabases[] = 'peedocastdb';
+
+        (new PostgresDatabaseCreator())->grant($session, 'peedocastdb', 'app_user');
+
+        $this->assertSame([
+            'grant connect on database "peedocastdb" to "app_user"',
+            'grant usage, create on schema public to "app_user"',
+        ], $session->statements);
+        $this->assertSame(['peedocastdb'], $session->databases);
+    }
+
     public function test_it_rejects_the_postgres_superuser_as_the_app_login(): void
     {
         $this->expectException(InvalidArgumentException::class);

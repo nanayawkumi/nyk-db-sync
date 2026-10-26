@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Nanayawkumi\NykDbSync\View\Components\Panel;
 use Nanayawkumi\NykDbSync\Console\CreatePostgresDatabaseCommand;
+use Nanayawkumi\NykDbSync\Console\GrantPostgresPrivilegesCommand;
 use Nanayawkumi\NykDbSync\Console\OptimizePostgresCommand;
 use Nanayawkumi\NykDbSync\Console\RepairPostgresSequencesCommand;
 use Nanayawkumi\NykDbSync\Console\SyncSecondaryDatabaseCommand;
@@ -76,6 +77,7 @@ final class NykDbSyncServiceProvider extends ServiceProvider
                 SyncSecondaryDatabaseCommand::class,
                 RepairPostgresSequencesCommand::class,
                 CreatePostgresDatabaseCommand::class,
+                GrantPostgresPrivilegesCommand::class,
                 OptimizePostgresCommand::class,
             ]);
         }
@@ -101,6 +103,7 @@ final class NykDbSyncServiceProvider extends ServiceProvider
                 Route::post('/switch', [DatabaseSyncController::class, 'switchEngine'])->name('switch');
                 Route::post('/repair-sequences', [DatabaseSyncController::class, 'repairSequences'])->name('repair');
                 Route::post('/create-database', [DatabaseSyncController::class, 'createDatabase'])->name('create-database');
+                Route::post('/grant', [DatabaseSyncController::class, 'grantPrivileges'])->name('grant');
             });
     }
 

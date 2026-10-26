@@ -46,6 +46,30 @@ final class PostgresDatabaseCreator
         $session->statement("grant usage, create on schema public to {$role}");
     }
 
+    public function grant(PostgresSession $session, string $database, string $username): void
+    {
+        $this->assertName($database, 'database');
+        $this->assertName($username, 'username');
+
+        if (in_array(strtolower($database), ['template0', 'template1'], true)) {
+            throw new InvalidArgumentException('Choose an app database other than a template database.');
+        }
+
+        if (! $this->exists($session, 'select 1 from pg_roles where rolname = ?', $username)) {
+            throw new InvalidArgumentException("Login [{$username}] does not exist. Create it with nyk-db-sync:create-database.");
+        }
+
+        if (! $this->exists($session, 'select 1 from pg_database where datname = ?', $database)) {
+            throw new InvalidArgumentException("Database [{$database}] does not exist.");
+        }
+
+        $role = $this->quote($username);
+        $databaseSql = $this->quote($database);
+        $session->statement("grant connect on database {$databaseSql} to {$role}");
+        $session->useDatabase($database);
+        $session->statement("grant usage, create on schema public to {$role}");
+    }
+
     private function exists(PostgresSession $session, string $sql, string $name): bool
     {
         return $session->select($sql, [$name]) !== [];

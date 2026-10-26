@@ -106,6 +106,7 @@
         </p>
     </section>
 
+    @if ($postgresDatabaseMissing)
     <section class="panel">
         <h2>Create Postgres database</h2>
         <p class="muted">Connects as the local <code>postgres</code> superuser, creates the empty database and app login, grants <code>CONNECT</code> plus <code>USAGE</code> and <code>CREATE</code> on schema <code>public</code>, and overwrites <code>PGSQL_HOST</code>, <code>PGSQL_PORT</code>, <code>PGSQL_DATABASE</code>, <code>PGSQL_USERNAME</code>, and <code>PGSQL_PASSWORD</code>.</p>
@@ -158,6 +159,38 @@
                 apply();
             }());
         </script>
+    </section>
+    @endif
+
+    <section class="panel">
+        <form method="post" action="{{ route('nyk-db-sync.grant') }}">
+            @csrf
+            <h2>Grant schema privileges</h2>
+            <p class="muted">For a Postgres database that already exists. Connects as the local <code>postgres</code> superuser and grants the app login <code>CONNECT</code> plus <code>USAGE</code> and <code>CREATE</code> on schema <code>public</code>.</p>
+            <div class="fields">
+                <label>
+                    Host
+                    <input type="text" name="host" value="{{ old('host', $pgsql['host']) }}" autocomplete="off">
+                </label>
+                <label>
+                    Port
+                    <input type="number" name="port" value="{{ old('port', $pgsql['port']) }}" min="1" max="65535">
+                </label>
+                <label>
+                    Database name
+                    <input type="text" name="database" value="{{ old('database', $pgsql['database']) }}" autocomplete="off">
+                </label>
+                <label>
+                    App login
+                    <input type="text" name="username" value="{{ old('username', $pgsql['username']) }}" autocomplete="off">
+                </label>
+                <label>
+                    Postgres superuser password
+                    <input type="password" name="admin_password" autocomplete="new-password" placeholder="empty for local trust auth">
+                </label>
+            </div>
+            <button class="secondary" type="submit">Grant privileges</button>
+        </form>
     </section>
 
     <section class="panel">
