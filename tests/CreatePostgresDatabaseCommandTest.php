@@ -21,7 +21,7 @@ class CreatePostgresDatabaseCommandTest extends TestCase
         {
             public function __construct(private PostgresSession $session) {}
 
-            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            public function open(string $host, string $port, string $adminPassword, string $adminUsername = 'postgres'): PostgresSession
             {
                 return $this->session;
             }
@@ -72,7 +72,7 @@ class CreatePostgresDatabaseCommandTest extends TestCase
         {
             public function __construct(private PostgresSession $session) {}
 
-            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            public function open(string $host, string $port, string $adminPassword, string $adminUsername = 'postgres'): PostgresSession
             {
                 return $this->session;
             }

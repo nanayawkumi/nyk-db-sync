@@ -37,6 +37,7 @@ class AdminPageTest extends TestCase
             ->assertDontSee('Create Postgres database')
             ->assertDontSee('Generate a password')
             ->assertSee('Grant schema privileges')
+            ->assertSee('Superuser login')
             ->assertDontSee('Not connected');
 
         $this->from('/nyk-db-sync')->post('/nyk-db-sync/sync')->assertRedirect('/nyk-db-sync');
@@ -123,7 +124,7 @@ class AdminPageTest extends TestCase
         {
             public function __construct(private PostgresSession $session) {}
 
-            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            public function open(string $host, string $port, string $adminPassword, string $adminUsername = 'postgres'): PostgresSession
             {
                 return $this->session;
             }
@@ -168,7 +169,7 @@ class AdminPageTest extends TestCase
         {
             public function __construct(private PostgresSession $session) {}
 
-            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            public function open(string $host, string $port, string $adminPassword, string $adminUsername = 'postgres'): PostgresSession
             {
                 return $this->session;
             }
@@ -207,15 +208,20 @@ class AdminPageTest extends TestCase
         $session->roles[] = 'app_user';
         $session->existingDatabases[] = 'peedocastdb';
 
-        $this->app->instance(PostgresSessionFactory::class, new class($session) implements PostgresSessionFactory
+        $factory = new class($session) implements PostgresSessionFactory
         {
+            public string $adminUsername = '';
+
             public function __construct(private PostgresSession $session) {}
 
-            public function open(string $host, string $port, string $adminPassword): PostgresSession
+            public function open(string $host, string $port, string $adminPassword, string $adminUsername = 'postgres'): PostgresSession
             {
+                $this->adminUsername = $adminUsername;
+
                 return $this->session;
             }
-        });
+        };
+        $this->app->instance(PostgresSessionFactory::class, $factory);
 
         $this->from('/nyk-db-sync')
             ->post('/nyk-db-sync/grant', [
@@ -223,11 +229,13 @@ class AdminPageTest extends TestCase
                 'port' => '5432',
                 'database' => 'peedocastdb',
                 'username' => 'app_user',
+                'admin_username' => 'dbadmin',
                 'admin_password' => '',
             ])
             ->assertRedirect('/nyk-db-sync')
             ->assertSessionHas('status', 'Granted CONNECT, USAGE, and CREATE on [peedocastdb] to [app_user].');
 
+        $this->assertSame('dbadmin', $factory->adminUsername);
         $this->assertSame([
             'grant connect on database "peedocastdb" to "app_user"',
             'grant usage, create on schema public to "app_user"',

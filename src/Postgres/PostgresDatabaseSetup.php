@@ -23,7 +23,7 @@ final class PostgresDatabaseSetup
         return Str::password(32);
     }
 
-    public function install(string $host, string $port, string $database, string $username, string $password, string $adminPassword): void
+    public function install(string $host, string $port, string $database, string $username, string $password, string $adminPassword, string $adminUsername = 'postgres'): void
     {
         if (preg_match('/^[A-Za-z0-9._-]+$/', $host) !== 1) {
             throw new InvalidArgumentException("The host [{$host}] is not a hostname or address.");
@@ -45,7 +45,11 @@ final class PostgresDatabaseSetup
             throw new InvalidArgumentException('The login password cannot be empty.');
         }
 
-        $session = $this->sessions->open($host, $port, $adminPassword);
+        if (! TableName::isSafe($adminUsername)) {
+            throw new InvalidArgumentException("The superuser [{$adminUsername}] may contain only letters, numbers, and underscores.");
+        }
+
+        $session = $this->sessions->open($host, $port, $adminPassword, $adminUsername);
         $this->creator->create($session, $database, $username, $password);
         $this->dotenv->update([
             'PGSQL_HOST' => $host,

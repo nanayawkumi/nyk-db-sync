@@ -18,7 +18,8 @@ class CreatePostgresDatabaseCommand extends Command
         {--username= : App login to create}
         {--password= : Password for that login}
         {--generate-password : Create a random login password instead of asking for one}
-        {--admin-password= : Password for the postgres superuser. Empty uses local trust or peer auth.}';
+        {--admin-username=postgres : Superuser login used to connect.}
+        {--admin-password= : Password for that superuser. Empty uses local trust or peer auth.}';
 
     protected $description = 'Create an empty Postgres database and login, then write PGSQL_* into .env';
 
@@ -33,6 +34,7 @@ class CreatePostgresDatabaseCommand extends Command
                 $input['username'],
                 $input['password'],
                 $input['admin_password'],
+                $input['admin_username'],
             );
         } catch (InvalidArgumentException|Throwable $exception) {
             $this->error($exception->getMessage());
@@ -51,7 +53,7 @@ class CreatePostgresDatabaseCommand extends Command
     }
 
     /**
-     * @return array{host: string, port: string, database: string, username: string, password: string, admin_password: string, generated: bool}
+     * @return array{host: string, port: string, database: string, username: string, password: string, admin_username: string, admin_password: string, generated: bool}
      */
     private function details(PostgresDatabaseSetup $setup): array
     {
@@ -61,6 +63,7 @@ class CreatePostgresDatabaseCommand extends Command
         $username = $this->stringOption('username');
         $password = $this->stringOption('password');
         $generated = (bool) $this->option('generate-password');
+        $adminUsername = $this->stringOption('admin-username');
         $adminPassword = $this->option('admin-password');
 
         if ($host === '') {
@@ -85,6 +88,10 @@ class CreatePostgresDatabaseCommand extends Command
             $password = (string) $this->secret('Password for that login');
         }
 
+        if ($adminUsername === '') {
+            $adminUsername = 'postgres';
+        }
+
         if (! is_string($adminPassword)) {
             $adminPassword = (string) $this->secret('Postgres superuser password (empty for local trust auth)');
         }
@@ -95,6 +102,7 @@ class CreatePostgresDatabaseCommand extends Command
             'database' => $database,
             'username' => $username,
             'password' => $password,
+            'admin_username' => $adminUsername,
             'admin_password' => $adminPassword,
             'generated' => $generated,
         ];

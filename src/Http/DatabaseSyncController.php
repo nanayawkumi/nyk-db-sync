@@ -145,6 +145,7 @@ final class DatabaseSyncController
                 'username' => ['required', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
                 'password' => ['required_unless:generate_password,1', 'nullable', 'string'],
                 'generate_password' => ['nullable', 'boolean'],
+                'admin_username' => ['nullable', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
                 'admin_password' => ['nullable', 'string'],
             ]);
         } catch (ValidationException $exception) {
@@ -164,6 +165,7 @@ final class DatabaseSyncController
                 $data['username'],
                 $password,
                 (string) ($data['admin_password'] ?? ''),
+                $this->adminUsername($data['admin_username'] ?? null),
             );
         } catch (Throwable $exception) {
             return back()
@@ -190,6 +192,7 @@ final class DatabaseSyncController
                 'port' => ['required', 'integer', 'min:1', 'max:65535'],
                 'database' => ['required', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
                 'username' => ['required', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
+                'admin_username' => ['nullable', 'string', 'regex:/^[A-Za-z0-9_]+$/'],
                 'admin_password' => ['nullable', 'string'],
             ]);
         } catch (ValidationException $exception) {
@@ -199,7 +202,12 @@ final class DatabaseSyncController
         }
 
         try {
-            $session = $sessions->open($data['host'], (string) $data['port'], (string) ($data['admin_password'] ?? ''));
+            $session = $sessions->open(
+                $data['host'],
+                (string) $data['port'],
+                (string) ($data['admin_password'] ?? ''),
+                $this->adminUsername($data['admin_username'] ?? null),
+            );
             $creator->grant($session, $data['database'], $data['username']);
         } catch (Throwable $exception) {
             return back()
@@ -242,6 +250,11 @@ final class DatabaseSyncController
             'database' => is_string($configured['database'] ?? null) ? $configured['database'] : '',
             'username' => is_string($configured['username'] ?? null) ? $configured['username'] : '',
         ];
+    }
+
+    private function adminUsername(mixed $username): string
+    {
+        return is_string($username) && $username !== '' ? $username : 'postgres';
     }
 
     private function configured(string $key): ?string

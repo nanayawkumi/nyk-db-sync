@@ -8,6 +8,7 @@ use Illuminate\Console\Command;
 use InvalidArgumentException;
 use Nanayawkumi\NykDbSync\Postgres\PostgresDatabaseCreator;
 use Nanayawkumi\NykDbSync\Postgres\PostgresSessionFactory;
+use Nanayawkumi\NykDbSync\TableName;
 use Throwable;
 
 class GrantPostgresPrivilegesCommand extends Command
@@ -17,7 +18,8 @@ class GrantPostgresPrivilegesCommand extends Command
         {--port= : Postgres port. Defaults to the pgsql connection.}
         {--database= : Database name. Defaults to the pgsql connection.}
         {--username= : App login to grant. Defaults to the pgsql connection.}
-        {--admin-password= : Password for the postgres superuser. Empty uses local trust or peer auth.}';
+        {--admin-username=postgres : Superuser login used to connect.}
+        {--admin-password= : Password for that superuser. Empty uses local trust or peer auth.}';
 
     protected $description = 'Grant the Postgres login CONNECT plus USAGE and CREATE on schema public';
 
@@ -25,7 +27,7 @@ class GrantPostgresPrivilegesCommand extends Command
     {
         try {
             $input = $this->details();
-            $session = $sessions->open($input['host'], $input['port'], $input['admin_password']);
+            $session = $sessions->open($input['host'], $input['port'], $input['admin_password'], $input['admin_username']);
             $creator->grant($session, $input['database'], $input['username']);
         } catch (InvalidArgumentException|Throwable $exception) {
             $this->error($exception->getMessage());
@@ -39,7 +41,7 @@ class GrantPostgresPrivilegesCommand extends Command
     }
 
     /**
-     * @return array{host: string, port: string, database: string, username: string, admin_password: string}
+     * @return array{host: string, port: string, database: string, username: string, admin_username: string, admin_password: string}
      */
     private function details(): array
     {
@@ -49,6 +51,7 @@ class GrantPostgresPrivilegesCommand extends Command
         $port = $this->stringOption('port');
         $database = $this->stringOption('database');
         $username = $this->stringOption('username');
+        $adminUsername = $this->stringOption('admin-username');
         $adminPassword = $this->option('admin-password');
 
         if ($host === '') {
@@ -75,6 +78,10 @@ class GrantPostgresPrivilegesCommand extends Command
             $username = trim((string) $this->ask('App login'));
         }
 
+        if ($adminUsername === '') {
+            $adminUsername = 'postgres';
+        }
+
         if (! is_string($adminPassword)) {
             $adminPassword = (string) $this->secret('Postgres superuser password (empty for local trust auth)');
         }
@@ -87,11 +94,16 @@ class GrantPostgresPrivilegesCommand extends Command
             throw new InvalidArgumentException("The port [{$port}] must be a number.");
         }
 
+        if (! TableName::isSafe($adminUsername)) {
+            throw new InvalidArgumentException("The superuser [{$adminUsername}] may contain only letters, numbers, and underscores.");
+        }
+
         return [
             'host' => $host,
             'port' => $port,
             'database' => $database,
             'username' => $username,
+            'admin_username' => $adminUsername,
             'admin_password' => $adminPassword,
         ];
     }

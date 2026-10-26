@@ -13,6 +13,7 @@ final class PdoPostgresSession implements PostgresSession
     public function __construct(
         private string $host,
         private string $port,
+        private string $username,
         private string $adminPassword,
         string $database,
     ) {
@@ -42,7 +43,7 @@ final class PdoPostgresSession implements PostgresSession
     {
         return new PDO(
             sprintf('pgsql:host=%s;port=%s;dbname=%s', $this->host, $this->port, $database),
-            'postgres',
+            $this->username,
             $this->adminPassword,
             [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION],
         );

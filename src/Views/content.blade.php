@@ -109,7 +109,7 @@
     @if ($postgresDatabaseMissing)
     <section class="panel">
         <h2>Create Postgres database</h2>
-        <p class="muted">Connects as the local <code>postgres</code> superuser, creates the empty database and app login, grants <code>CONNECT</code> plus <code>USAGE</code> and <code>CREATE</code> on schema <code>public</code>, and overwrites <code>PGSQL_HOST</code>, <code>PGSQL_PORT</code>, <code>PGSQL_DATABASE</code>, <code>PGSQL_USERNAME</code>, and <code>PGSQL_PASSWORD</code>.</p>
+        <p class="muted">Connects as the superuser you name, creates the empty database and app login, grants <code>CONNECT</code> plus <code>USAGE</code> and <code>CREATE</code> on schema <code>public</code>, and overwrites <code>PGSQL_HOST</code>, <code>PGSQL_PORT</code>, <code>PGSQL_DATABASE</code>, <code>PGSQL_USERNAME</code>, and <code>PGSQL_PASSWORD</code>.</p>
         <form method="post" action="{{ route('nyk-db-sync.create-database') }}">
             @csrf
             <div class="fields">
@@ -136,6 +136,10 @@
                 <label class="check">
                     <input type="checkbox" name="generate_password" value="1" @checked(old('generate_password'))>
                     Generate a password
+                </label>
+                <label>
+                    Superuser login
+                    <input type="text" name="admin_username" value="{{ old('admin_username', 'postgres') }}" autocomplete="off">
                 </label>
                 <label>
                     Postgres superuser password
@@ -166,7 +170,7 @@
         <form method="post" action="{{ route('nyk-db-sync.grant') }}">
             @csrf
             <h2>Grant schema privileges</h2>
-            <p class="muted">For a Postgres database that already exists. Connects as the local <code>postgres</code> superuser and grants the app login <code>CONNECT</code> plus <code>USAGE</code> and <code>CREATE</code> on schema <code>public</code>.</p>
+            <p class="muted">For a Postgres database that already exists. Connects as the superuser you name and grants the app login <code>CONNECT</code> plus <code>USAGE</code> and <code>CREATE</code> on schema <code>public</code>.</p>
             <div class="fields">
                 <label>
                     Host
@@ -183,6 +187,10 @@
                 <label>
                     App login
                     <input type="text" name="username" value="{{ old('username', $pgsql['username']) }}" autocomplete="off">
+                </label>
+                <label>
+                    Superuser login
+                    <input type="text" name="admin_username" value="{{ old('admin_username', 'postgres') }}" autocomplete="off">
                 </label>
                 <label>
                     Postgres superuser password
