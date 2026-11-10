@@ -8,6 +8,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Nanayawkumi\NykDbSync\Analysis\DecisionStore;
 use Nanayawkumi\NykDbSync\TableName;
 use RuntimeException;
 use Throwable;
@@ -25,16 +26,17 @@ final class SchemaSynchronizer
         'tinyIncrements',
     ];
 
-    public function __construct(private ColumnTypeMapper $mapper) {}
+    public function __construct(private ColumnTypeMapper $mapper, private ?DecisionStore $decisions = null) {}
 
     /**
      * @param  list<string>  $tables
-     * @return array{created: list<string>, columns_added: array<string, list<string>>, foreign_keys: list<string>}
+     * @return array{created: list<string>, columns_added: array<string, list<string>>, columns_altered: list<string>, foreign_keys: list<string>}
      */
     public function ensure(string $source, string $destination, array $tables): array
     {
         $created = [];
         $columnsAdded = [];
+        $columnsAltered = [];
         $definitions = [];
 
         foreach ($tables as $table) {
@@ -63,6 +65,8 @@ final class SchemaSynchronizer
                         $columnsAdded[$table] = $added;
                     }
                 }
+
+                array_push($columnsAltered, ...$this->applyColumnFixes($destination, $table));
             } catch (Throwable $exception) {
                 $message = $exception->getMessage();
 
@@ -93,6 +97,7 @@ final class SchemaSynchronizer
         return [
             'created' => $created,
             'columns_added' => $columnsAdded,
+            'columns_altered' => $columnsAltered,
             'foreign_keys' => $foreignKeys,
         ];
     }
@@ -136,7 +141,7 @@ final class SchemaSynchronizer
                 }
             }
 
-            $this->addIndexes($blueprint, $definition['indexes'], $created, $auto);
+            $this->addIndexes($blueprint, $definition['indexes'], $created, $auto, $destination, $table, $definition['columns']);
 
             $seenForeignKeys = [];
 
@@ -277,7 +282,7 @@ final class SchemaSynchronizer
      */
     private function addColumn(Blueprint $blueprint, array $column, bool $compositePrimary): ?string
     {
-        $mapped = $this->mapper->map($column);
+        $mapped = $this->applyFixes($blueprint->getTable(), (string) ($column['name'] ?? ''), $this->mapper->map($column));
 
         foreach ($mapped['warnings'] as $warning) {
             Log::warning('[nyk-db-sync] '.$warning, [
@@ -321,13 +326,110 @@ final class SchemaSynchronizer
     }
 
     /**
+     * Apply the fixes the user chose for this column during analysis.
+     *
+     * @param  array<string, mixed>  $mapped
+     * @return array<string, mixed>
+     */
+    private function applyFixes(string $table, string $column, array $mapped): array
+    {
+        if ($this->decisions === null || $mapped['skipped'] || in_array($mapped['method'], self::AUTO_METHODS, true)) {
+            return $mapped;
+        }
+
+        foreach ($this->decisions->fixesFor($table, $column, 'column_type', 'nullable') as $fix) {
+            if ($fix['kind'] === 'column_type') {
+                $mapped['method'] = (string) $fix['method'];
+                $mapped['parameters'] = array_values($fix['parameters'] ?? []);
+                $mapped['unsigned'] = false;
+            } else {
+                $mapped['nullable'] = true;
+            }
+        }
+
+        return $mapped;
+    }
+
+    /**
+     * Change columns that already exist on a Postgres destination to match the
+     * fixes the user chose. Other drivers are changed by hand.
+     *
+     * @return list<string> columns changed, as table.column
+     */
+    private function applyColumnFixes(string $destination, string $table): array
+    {
+        if ($this->decisions === null || DB::connection($destination)->getDriverName() !== 'pgsql') {
+            return [];
+        }
+
+        $fixes = $this->decisions->schemaFixesFor($table);
+
+        if ($fixes === []) {
+            return [];
+        }
+
+        $existing = [];
+
+        foreach (Schema::connection($destination)->getColumns($table) as $column) {
+            $existing[(string) $column['name']] = $column;
+        }
+
+        $connection = DB::connection($destination);
+        $grammar = $connection->getQueryGrammar();
+        $changed = [];
+
+        foreach ($fixes as ['column' => $name, 'fix' => $fix]) {
+            if (! isset($existing[$name])) {
+                continue;
+            }
+
+            $target = $grammar->wrapTable($table).' alter column '.$grammar->wrap($name);
+
+            if ($fix['kind'] === 'nullable') {
+                if (($existing[$name]['nullable'] ?? true) === false) {
+                    $connection->statement("alter table {$target} drop not null");
+                    $changed[] = "{$table}.{$name}";
+                }
+
+                continue;
+            }
+
+            [$type, $typeName] = match ($fix['method']) {
+                'text' => ['text', 'text'],
+                'bigInteger' => ['bigint', 'int8'],
+                'decimal' => ['numeric('.(int) ($fix['parameters'][0] ?? 20).','.(int) ($fix['parameters'][1] ?? 0).')', 'numeric'],
+                default => [null, null],
+            };
+
+            $current = strtolower((string) ($existing[$name]['type'] ?? ''));
+
+            if ($type === null
+                || ($typeName !== 'numeric' && strtolower((string) ($existing[$name]['type_name'] ?? '')) === $typeName)
+                || ($typeName === 'numeric' && $current === $type)) {
+                continue;
+            }
+
+            $connection->statement("alter table {$target} type {$type} using ".$grammar->wrap($name)."::{$type}");
+            $changed[] = "{$table}.{$name}";
+        }
+
+        return $changed;
+    }
+
+    /**
      * @param  list<array<string, mixed>>  $indexes
      * @param  list<string>  $createdColumns
      * @param  array<string, true>  $autoColumns
      */
-    private function addIndexes(Blueprint $blueprint, array $indexes, array $createdColumns, array $autoColumns): void
+    private function addIndexes(Blueprint $blueprint, array $indexes, array $createdColumns, array $autoColumns, string $destination = '', string $table = '', array $sourceColumns = []): void
     {
         $seen = [];
+        $driver = $destination !== '' ? DB::connection($destination)->getDriverName() : '';
+        $types = [];
+
+        foreach ($sourceColumns as $column) {
+            $types[(string) ($column['name'] ?? '')] = strtolower((string) ($column['type_name'] ?? $column['type'] ?? ''));
+        }
 
         foreach ($indexes as $index) {
             $columns = array_values($index['columns'] ?? []);
@@ -337,6 +439,29 @@ final class SchemaSynchronizer
             }
 
             $kind = ($index['primary'] ?? false) ? 'primary' : (($index['unique'] ?? false) ? 'unique' : 'index');
+            $type = strtolower((string) ($index['type'] ?? ''));
+
+            if ($kind === 'index' && $type === 'fulltext') {
+                // A full-text index is not a btree. Build the engine's own kind, or none where there is no equivalent.
+                if (in_array($driver, ['mysql', 'mariadb', 'pgsql'], true)) {
+                    $kind = 'fulltext';
+                } else {
+                    continue;
+                }
+            } elseif ($kind === 'index' && in_array($type, ['spatial', 'rtree'], true)) {
+                continue;
+            }
+
+            if ($kind === 'index' && $driver === 'pgsql' && $this->indexesLongText($columns, $types)) {
+                // MySQL indexes long text by prefix. A Postgres btree over the whole value fails on large rows.
+                Log::warning('[nyk-db-sync] Skipped an index over long text columns on Postgres', [
+                    'table' => $table,
+                    'columns' => $columns,
+                ]);
+
+                continue;
+            }
+
             $signature = $kind.':'.implode(',', $columns);
 
             if (isset($seen[$signature])) {
@@ -361,8 +486,29 @@ final class SchemaSynchronizer
                 continue;
             }
 
+            if ($kind === 'fulltext') {
+                $blueprint->fullText($columns);
+
+                continue;
+            }
+
             $blueprint->index($columns);
         }
+    }
+
+    /**
+     * @param  list<string>  $columns
+     * @param  array<string, string>  $types
+     */
+    private function indexesLongText(array $columns, array $types): bool
+    {
+        foreach ($columns as $column) {
+            if (in_array($types[$column] ?? '', ['text', 'mediumtext', 'longtext', 'blob', 'mediumblob', 'longblob'], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

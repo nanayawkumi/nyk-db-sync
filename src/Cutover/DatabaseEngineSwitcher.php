@@ -66,8 +66,6 @@ final class DatabaseEngineSwitcher
             return ['ok' => false, 'message' => $misaligned];
         }
 
-        Artisan::call('queue:restart');
-
         $this->dotenv->update([
             'DB_CONNECTION' => $engine,
             'DB_DUAL_WRITE' => $keepDualWrite ? 'true' : 'false',

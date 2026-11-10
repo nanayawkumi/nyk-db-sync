@@ -125,7 +125,7 @@ class DualWrite
             }
         }
 
-        return $this->rows->normalize($row, $meta, $driver);
+        return $this->rows->normalize($row, $meta, $driver, $table);
     }
 
     /**

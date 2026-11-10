@@ -10,7 +10,10 @@ use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
+use Nanayawkumi\NykDbSync\Analysis\AnalysisStore;
+use Nanayawkumi\NykDbSync\Analysis\DecisionStore;
 use Nanayawkumi\NykDbSync\View\Components\Panel;
+use Nanayawkumi\NykDbSync\Console\AnalyzeDatabaseCommand;
 use Nanayawkumi\NykDbSync\Console\CreatePostgresDatabaseCommand;
 use Nanayawkumi\NykDbSync\Console\GrantPostgresPrivilegesCommand;
 use Nanayawkumi\NykDbSync\Console\OptimizePostgresCommand;
@@ -24,6 +27,7 @@ use Nanayawkumi\NykDbSync\Database\DualWriteSQLiteConnection;
 use Nanayawkumi\NykDbSync\Http\DatabaseSyncController;
 use Nanayawkumi\NykDbSync\Postgres\PdoPostgresSessionFactory;
 use Nanayawkumi\NykDbSync\Postgres\PostgresSessionFactory;
+use Nanayawkumi\NykDbSync\Sync\ColumnMetadata;
 use ReflectionClass;
 
 final class NykDbSyncServiceProvider extends ServiceProvider
@@ -38,6 +42,10 @@ final class NykDbSyncServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/nyk-db-sync.php', 'nyk-db-sync');
 
         $this->app->bind(PostgresSessionFactory::class, PdoPostgresSessionFactory::class);
+        $this->app->singleton(ColumnMetadata::class);
+        $this->app->singleton(DualWrite::class);
+        $this->app->singleton(DecisionStore::class);
+        $this->app->singleton(AnalysisStore::class);
 
         Connection::resolverFor('mysql', function ($connection, $database, $prefix, $config) {
             return new DualWriteMySqlConnection($connection, $database, $prefix, $config);
@@ -74,6 +82,7 @@ final class NykDbSyncServiceProvider extends ServiceProvider
             ], 'nyk-db-sync-views');
 
             $this->commands([
+                AnalyzeDatabaseCommand::class,
                 SyncSecondaryDatabaseCommand::class,
                 RepairPostgresSequencesCommand::class,
                 CreatePostgresDatabaseCommand::class,
@@ -99,6 +108,8 @@ final class NykDbSyncServiceProvider extends ServiceProvider
             ->name('nyk-db-sync.')
             ->group(function (): void {
                 Route::get('/', [DatabaseSyncController::class, 'index'])->name('index');
+                Route::post('/analyze', [DatabaseSyncController::class, 'analyze'])->name('analyze');
+                Route::post('/analysis/decisions', [DatabaseSyncController::class, 'decide'])->name('decide');
                 Route::post('/sync', [DatabaseSyncController::class, 'sync'])->name('sync');
                 Route::post('/switch', [DatabaseSyncController::class, 'switchEngine'])->name('switch');
                 Route::post('/repair-sequences', [DatabaseSyncController::class, 'repairSequences'])->name('repair');

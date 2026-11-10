@@ -52,11 +52,16 @@ abstract class TestCase extends Orchestra
         $app['config']->set('nyk-db-sync.ui.enabled', true);
         $app['config']->set('nyk-db-sync.ui.middleware', ['web']);
         $app['config']->set('nyk-db-sync.ui.gate', null);
+        $app['config']->set('nyk-db-sync.ui.allow_without_gate', true);
     }
 
     protected function setUp(): void
     {
         parent::setUp();
+
+        foreach (['analysis.json', 'decisions.json', 'last-sync.json'] as $file) {
+            @unlink(storage_path('app/nyk-db-sync/'.$file));
+        }
 
         DB::purge('sqlite');
         DB::purge('sqlite_secondary');

@@ -151,6 +151,11 @@ class DualWriteQueryBuilder extends Builder
         try {
             $dualWrite = app(DualWrite::class);
 
+            // Nothing to replicate: do not touch the secondary connection at all.
+            if ($table === null || ! $dualWrite->shouldReplicateConnection($this->connection->getName(), $table)) {
+                return null;
+            }
+
             if ($values !== [] && array_is_list($values) && isset($values[0]) && is_array($values[0])) {
                 return array_map(
                     fn (array $row): array => $dualWrite->normalizeForSecondary($table, $row),

@@ -7,6 +7,8 @@ namespace Nanayawkumi\NykDbSync\Sync;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Nanayawkumi\NykDbSync\Analysis\AnalysisBlockedException;
+use Nanayawkumi\NykDbSync\Analysis\DatabaseAnalyzer;
 use Nanayawkumi\NykDbSync\DualWrite;
 use Nanayawkumi\NykDbSync\Schema\SchemaSynchronizer;
 use Nanayawkumi\NykDbSync\Schema\TableCatalog;
@@ -17,6 +19,10 @@ use Throwable;
 
 final class SecondaryDatabaseSyncService
 {
+    private static ?\Closure $shutdownCheckpoint = null;
+
+    private static bool $shutdownRegistered = false;
+
     public function __construct(
         protected DualWrite $dualWrite,
         protected SchemaSynchronizer $schema,
@@ -25,6 +31,8 @@ final class SecondaryDatabaseSyncService
         protected ColumnMetadata $columns,
         protected SummaryStore $summaries,
         protected ForeignKeyGuard $foreignKeys,
+        protected DatabaseAnalyzer $analyzer,
+        protected UpsertKey $upsertKey,
     ) {}
 
     /**
@@ -35,6 +43,7 @@ final class SecondaryDatabaseSyncService
         int $chunk = 500,
         bool $withSchema = true,
         bool $schemaOnly = false,
+        bool $skipAnalysis = false,
     ): array {
         $primary = $this->dualWrite->primaryConnection();
         $secondary = $this->dualWrite->secondaryConnection();
@@ -49,6 +58,15 @@ final class SecondaryDatabaseSyncService
 
         $chunk = max(1, $chunk);
         $tables = $this->tablesFor($primary, $onlyTable);
+
+        if (! $skipAnalysis && config('nyk-db-sync.analysis.required', true)) {
+            $blocked = $this->analyzer->blocked($tables, $schemaOnly);
+
+            if ($blocked !== []) {
+                throw new AnalysisBlockedException($blocked);
+            }
+        }
+
         $started = hrtime(true);
         $schemaSummary = [
             'created' => [],
@@ -89,13 +107,25 @@ final class SecondaryDatabaseSyncService
             $this->storeMeasuredPace($summary, $copiedRows, ($lastBatchAt - $copyStarted) / 1e9, false);
         };
 
-        register_shutdown_function(static function () use ($checkpoint, &$finished): void {
+        // One handler per process, however many syncs run (queue workers run many).
+        self::$shutdownCheckpoint = static function () use ($checkpoint, &$finished): void {
             if ($finished) {
                 return;
             }
 
             $checkpoint(true);
-        });
+        };
+
+        if (! self::$shutdownRegistered) {
+            self::$shutdownRegistered = true;
+            register_shutdown_function(static function (): void {
+                $pending = self::$shutdownCheckpoint;
+
+                if ($pending !== null) {
+                    $pending();
+                }
+            });
+        }
 
         try {
             if (! $schemaOnly) {
@@ -137,8 +167,10 @@ final class SecondaryDatabaseSyncService
             $summary['duration_seconds'] = round((hrtime(true) - $started) / 1e9, 3);
             $copySeconds = $copyStarted === 0 ? 0.0 : ($lastBatchAt - $copyStarted) / 1e9;
             $this->storeMeasuredPace($summary, (int) $summary['rows_copied'], $copySeconds, true);
+            self::$shutdownCheckpoint = null;
         } catch (Throwable $exception) {
             $checkpoint(true);
+            self::$shutdownCheckpoint = null;
 
             throw $exception;
         }
@@ -287,8 +319,8 @@ final class SecondaryDatabaseSyncService
      */
     public function misalignedReason(int $maxDelta = 0, ?array $rows = null): ?string
     {
-        $minimum = (int) config('nyk-db-sync.alignment.minimum', 10);
-        $ratio = (float) config('nyk-db-sync.alignment.ratio', 0.01);
+        $minimum = (int) config('nyk-db-sync.alignment.minimum', 0);
+        $ratio = (float) config('nyk-db-sync.alignment.ratio', 0.0);
 
         foreach ($rows ?? $this->compareCounts() as $row) {
             if ($row['destination'] === null) {
@@ -447,7 +479,7 @@ final class SecondaryDatabaseSyncService
             ];
         }
 
-        $uniqueBy = $this->uniqueColumns($primary, $table);
+        $uniqueBy = $this->upsertKey->columns($primary, $table);
         $destinationColumns = array_flip(Schema::connection($secondary)->getColumnListing($table));
         $uniqueBy = array_values(array_filter(
             $uniqueBy,
@@ -462,14 +494,25 @@ final class SecondaryDatabaseSyncService
         $metadata = $this->columns->forTable($secondary, $table);
         $driver = DB::connection($secondary)->getDriverName();
 
-        $this->dualWrite->withoutReplication(function () use ($primary, $secondary, $table, $chunk, $uniqueBy, $destinationColumns, $metadata, $driver, $onBatch, &$copied): void {
+        $dropped = [];
+
+        $this->dualWrite->withoutReplication(function () use ($primary, $secondary, $table, $chunk, $uniqueBy, $destinationColumns, $metadata, $driver, $onBatch, &$copied, &$dropped): void {
             $query = DB::connection($primary)->table($table);
-            $callback = function ($rows) use ($secondary, $table, $uniqueBy, $destinationColumns, $metadata, $driver, $onBatch, &$copied): void {
+            $callback = function ($rows) use ($secondary, $table, $uniqueBy, $destinationColumns, $metadata, $driver, $onBatch, &$copied, &$dropped): void {
                 $payload = [];
 
                 foreach ($rows as $row) {
-                    $normalized = $this->rows->normalize((array) $row, $metadata, $driver);
+                    $normalized = $this->rows->normalize((array) $row, $metadata, $driver, $table);
                     $filtered = array_intersect_key($normalized, $destinationColumns);
+
+                    if ($dropped === [] && count($filtered) !== count($normalized)) {
+                        $dropped = array_keys(array_diff_key($normalized, $destinationColumns));
+
+                        Log::warning('[nyk-db-sync] Source columns are missing on the secondary and were not copied', [
+                            'table' => $table,
+                            'columns' => $dropped,
+                        ]);
+                    }
 
                     if ($filtered !== []) {
                         $payload[] = $filtered;
@@ -507,7 +550,7 @@ final class SecondaryDatabaseSyncService
             'copied' => $copied,
             'source' => (int) DB::connection($primary)->table($table)->count(),
             'destination' => (int) DB::connection($secondary)->table($table)->count(),
-        ];
+        ] + ($dropped !== [] ? ['dropped_columns' => $dropped] : []);
     }
 
     /**
@@ -545,36 +588,6 @@ final class SecondaryDatabaseSyncService
         }
 
         return $this->copyTable($primary, $secondary, $table, $chunk, true)['copied'];
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function uniqueColumns(string $connection, string $table): array
-    {
-        $indexes = Schema::connection($connection)->getIndexes($table);
-
-        foreach ($indexes as $index) {
-            if (($index['primary'] ?? false) === true && ! empty($index['columns'])) {
-                return array_values($index['columns']);
-            }
-        }
-
-        $columns = Schema::connection($connection)->getColumnListing($table);
-
-        if (in_array('id', $columns, true)) {
-            return ['id'];
-        }
-
-        if (in_array('key', $columns, true)) {
-            return ['key'];
-        }
-
-        if (in_array('email', $columns, true)) {
-            return ['email'];
-        }
-
-        return array_values($columns);
     }
 
     /**

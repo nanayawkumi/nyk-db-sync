@@ -16,7 +16,8 @@ class SyncSecondaryDatabaseCommand extends Command
         {--table= : Copy a single table}
         {--chunk=500 : Rows per batch}
         {--schema-only : Translate schema and skip the row copy}
-        {--no-schema : Copy rows into tables that already exist}';
+        {--no-schema : Copy rows into tables that already exist}
+        {--skip-analysis : Sync without the analysis check (see nyk-db-sync:analyze)}';
 
     protected $description = 'Translate schema and copy rows from the primary database to the secondary connection';
 
@@ -49,6 +50,7 @@ class SyncSecondaryDatabaseCommand extends Command
                 (int) $this->option('chunk'),
                 ! $noSchema,
                 $schemaOnly,
+                (bool) $this->option('skip-analysis'),
             );
         } catch (InvalidArgumentException|Throwable $exception) {
             $this->error($exception->getMessage());

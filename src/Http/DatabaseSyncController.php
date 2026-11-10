@@ -6,9 +6,12 @@ namespace Nanayawkumi\NykDbSync\Http;
 
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Nanayawkumi\NykDbSync\Analysis\DatabaseAnalyzer;
+use Nanayawkumi\NykDbSync\Analysis\DecisionStore;
 use Nanayawkumi\NykDbSync\Cutover\DatabaseEngineSwitcher;
 use Nanayawkumi\NykDbSync\DualWrite;
 use Nanayawkumi\NykDbSync\Postgres\PostgresDatabaseCreator;
@@ -64,11 +67,12 @@ final class DatabaseSyncController
         ];
         $reachable = $connections[1]['connected'];
         $pgsqlProbe = $sync->probe('pgsql');
-        $counts = $reachable ? $sync->compareCounts() : [];
+        $counts = $reachable ? $this->counts($sync) : [];
         $summary = $summaries->get();
         $lastDuration = is_array($summary) && isset($summary['duration_seconds'])
             ? (new SyncEstimate())->duration((float) $summary['duration_seconds'])
             : null;
+        $analysis = $reachable ? app(DatabaseAnalyzer::class)->stored() : [];
 
         return [
             'primary' => $primary,
@@ -82,6 +86,8 @@ final class DatabaseSyncController
                 'known' => $reachable,
             ]),
             'counts' => $counts,
+            'analysis' => $analysis,
+            'analysisBlocked' => array_keys(array_filter($analysis, static fn (array $entry): bool => $entry['status'] === DatabaseAnalyzer::BLOCKED)),
             'alignment' => $reachable ? $sync->misalignedReason(0, $counts) : 'Secondary database is unreachable.',
             'reachable' => $reachable,
             'engines' => $switcher->engines(),
@@ -92,6 +98,71 @@ final class DatabaseSyncController
                 $pgsqlProbe['error'],
             ),
         ];
+    }
+
+    public function analyze(Request $request, DatabaseAnalyzer $analyzer): RedirectResponse
+    {
+        $this->assertAllowed();
+
+        $data = $request->validate([
+            'table' => ['nullable', 'string', 'regex:/^[A-Za-z0-9_]*$/'],
+            'sample' => ['nullable', 'integer', 'min:0'],
+        ]);
+
+        $table = isset($data['table']) && $data['table'] !== '' ? $data['table'] : null;
+
+        try {
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(0);
+            }
+
+            $entries = $analyzer->analyze($table === null ? null : [$table], (int) ($data['sample'] ?? 0));
+        } catch (Throwable $exception) {
+            return back()->with('error', $exception->getMessage());
+        }
+
+        $blocked = count(array_filter($entries, static fn (array $entry): bool => $entry['status'] === DatabaseAnalyzer::BLOCKED));
+
+        return back()->with(
+            $blocked > 0 ? 'error' : 'status',
+            $blocked > 0
+                ? "Analysis found {$blocked} table(s) that need a decision before they can sync."
+                : 'Analysis finished. Every analyzed table can be converted and copied.',
+        );
+    }
+
+    public function decide(Request $request, DatabaseAnalyzer $analyzer): RedirectResponse
+    {
+        $this->assertAllowed();
+
+        $data = $request->validate([
+            'decisions' => ['required', 'array'],
+            'decisions.*' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $saved = 0;
+
+        try {
+            foreach ($data['decisions'] as $choice) {
+                // Each choice is "mode|issue id". Issue ids contain dots, so they cannot be field names.
+                if (! is_string($choice) || ! str_contains($choice, '|')) {
+                    continue;
+                }
+
+                [$mode, $issueId] = explode('|', $choice, 2);
+
+                if (! in_array($mode, [DecisionStore::AUTO, DecisionStore::MANUAL, DecisionStore::SKIP], true)) {
+                    continue;
+                }
+
+                $analyzer->decide($issueId, $mode);
+                $saved++;
+            }
+        } catch (Throwable $exception) {
+            return back()->with('error', $exception->getMessage());
+        }
+
+        return back()->with('status', $saved === 0 ? 'No decisions were chosen.' : "Saved {$saved} decision(s).");
     }
 
     public function sync(Request $request, SecondaryDatabaseSyncService $sync): RedirectResponse
@@ -112,8 +183,12 @@ final class DatabaseSyncController
 
             $sync->sync($table, 500, true, $request->boolean('schema_only'));
         } catch (Throwable $exception) {
+            Cache::forget(self::COUNTS_CACHE_KEY);
+
             return back()->with('error', $exception->getMessage());
         }
+
+        Cache::forget(self::COUNTS_CACHE_KEY);
 
         return back()->with('status', 'Sync finished.');
     }
@@ -129,6 +204,7 @@ final class DatabaseSyncController
         ]);
 
         $result = $switcher->switchTo($data['engine'], $request->boolean('keep_dual_write'));
+        Cache::forget(self::COUNTS_CACHE_KEY);
 
         return back()->with($result['ok'] ? 'status' : 'error', $result['message']);
     }
@@ -227,13 +303,39 @@ final class DatabaseSyncController
         return back()->with($result['ok'] ? 'status' : 'error', $result['message']);
     }
 
+    private const COUNTS_CACHE_KEY = 'nyk-db-sync.counts';
+
+    /**
+     * @return list<array{table: string, source: int, destination: int|null, delta: int}>
+     */
+    private function counts(SecondaryDatabaseSyncService $sync): array
+    {
+        $seconds = (int) config('nyk-db-sync.ui.counts_cache_seconds', 30);
+
+        if ($seconds <= 0) {
+            return $sync->compareCounts();
+        }
+
+        return Cache::remember(self::COUNTS_CACHE_KEY, $seconds, static fn (): array => $sync->compareCounts());
+    }
+
     private function assertAllowed(): void
     {
         $ability = config('nyk-db-sync.ui.gate');
 
         if (is_string($ability) && $ability !== '') {
             abort_unless(Gate::allows($ability), 403);
+
+            return;
         }
+
+        // This page can run syncs, rewrite .env and take database superuser credentials.
+        // "Any signed-in user" is not a safe default for that.
+        abort_unless(
+            (bool) config('nyk-db-sync.ui.allow_without_gate', false),
+            403,
+            'Set nyk-db-sync.ui.gate to a Gate ability before using the sync page.',
+        );
     }
 
     /**

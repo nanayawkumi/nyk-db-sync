@@ -62,6 +62,17 @@
         .nyk-db-sync .banner { padding: 10px 12px; border-radius: 12px; margin-bottom: 12px; }
         .nyk-db-sync .ok { background: var(--good-soft); color: var(--good); }
         .nyk-db-sync .bad { background: var(--bad-soft); color: var(--bad); }
+        .nyk-db-sync .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
+        .nyk-db-sync .badge.ready { background: var(--good-soft); color: var(--good); }
+        .nyk-db-sync .badge.attention { background: var(--warn-soft); color: var(--warn); }
+        .nyk-db-sync .badge.blocked { background: var(--bad-soft); color: var(--bad); }
+        .nyk-db-sync details { border-top: 1px solid #e8f0f6; padding: 10px 0; }
+        .nyk-db-sync summary { cursor: pointer; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .nyk-db-sync .issue { margin: 10px 0 0 4px; padding: 10px 12px; border-left: 3px solid var(--line); background: #f8fbfd; border-radius: 0 10px 10px 0; }
+        .nyk-db-sync .issue.blocker { border-left-color: var(--bad); }
+        .nyk-db-sync .issue.warning { border-left-color: var(--amber); }
+        .nyk-db-sync .issue p { margin: 0 0 6px; }
+        .nyk-db-sync .issue select { max-width: 460px; }
         .nyk-db-sync code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; color: var(--teal-deep); }
     </style>
 
@@ -202,6 +213,97 @@
     </section>
 
     <section class="panel">
+        <h2>Analyze</h2>
+        <p class="muted">
+            Simulates the conversion without writing anything: every column is checked against the destination type and the source data is scanned for values that would not fit.
+            Each table is reported as ready or blocked, with a fix you can apply yourself or let the package make.
+            Sync refuses a table while it has an unresolved blocking issue.
+        </p>
+        <form method="post" action="{{ route('nyk-db-sync.analyze') }}">
+            @csrf
+            <div class="fields">
+                <label>
+                    Single table
+                    <input type="text" name="table" value="{{ old('table') }}" placeholder="all discovered tables">
+                </label>
+                <label>
+                    Scan only the first N rows per table
+                    <input type="number" name="sample" min="0" value="{{ old('sample', 0) }}">
+                </label>
+            </div>
+            <button class="secondary" type="submit" @disabled(! $reachable)>Run analysis</button>
+        </form>
+
+        @if ($analysis === [])
+            <p class="muted" style="margin-top: 12px;">No analysis yet. Run one, or start a sync and it will analyze first.</p>
+        @else
+            @php
+                $blockedTables = count($analysisBlocked);
+            @endphp
+            <p style="margin-top: 12px;">
+                @if ($blockedTables > 0)
+                    <strong>{{ $blockedTables }} of {{ count($analysis) }} tables need a decision before they can sync.</strong>
+                @else
+                    <strong>Every analyzed table can be converted and copied.</strong>
+                @endif
+            </p>
+            <form method="post" action="{{ route('nyk-db-sync.decide') }}">
+                @csrf
+                @foreach ($analysis as $entry)
+                    @php
+                        $shown = array_values(array_filter($entry['issues'], fn ($issue) => $issue['severity'] !== 'info'));
+                        $notes = array_values(array_filter($entry['issues'], fn ($issue) => $issue['severity'] === 'info'));
+                    @endphp
+                    <details @if ($entry['status'] === 'blocked') open @endif>
+                        <summary>
+                            <code>{{ $entry['table'] }}</code>
+                            <span class="badge {{ $entry['status'] }}">
+                                {{ match ($entry['status']) { 'blocked' => 'Blocked', 'attention' => 'Ready, with notes', default => 'Ready' } }}
+                            </span>
+                            <span class="muted">{{ number_format($entry['rows']) }} rows{{ ! empty($entry['sampled']) ? ' (sampled)' : '' }} · {{ $entry['analyzed_at'] }}</span>
+                        </summary>
+                        @forelse ($shown as $issue)
+                            <div class="issue {{ $issue['severity'] }}">
+                                <p>
+                                    <strong>{{ ucfirst($issue['severity']) }}</strong>
+                                    @if ($issue['column'])
+                                        on <code>{{ $issue['column'] }}</code>
+                                    @endif
+                                    : {{ $issue['message'] }}
+                                </p>
+                                @if ($issue['recommendation'])
+                                    <p class="muted">{{ $issue['recommendation'] }}</p>
+                                @endif
+                                <label>
+                                    How to handle it
+                                    <select name="decisions[]">
+                                        <option value="">{{ $issue['decision'] ? 'Keep: '.$issue['decision'] : 'Choose…' }}</option>
+                                        @if ($issue['fix'])
+                                            <option value="auto|{{ $issue['id'] }}" @selected($issue['decision'] === 'auto')>Let the package fix it: {{ $issue['fix']['label'] }}</option>
+                                        @endif
+                                        <option value="manual|{{ $issue['id'] }}" @selected($issue['decision'] === 'manual')>I'll fix it myself (stays blocked until analysis passes)</option>
+                                        <option value="skip|{{ $issue['id'] }}" @selected($issue['decision'] === 'skip')>Accept the risk and sync anyway</option>
+                                    </select>
+                                </label>
+                            </div>
+                        @empty
+                            <p class="muted" style="margin-top: 8px;">No problems found.</p>
+                        @endforelse
+                        @if ($notes !== [])
+                            <p class="muted" style="margin-top: 8px;">
+                                @foreach ($notes as $note)
+                                    {{ $note['message'] }}@if (! $loop->last) · @endif
+                                @endforeach
+                            </p>
+                        @endif
+                    </details>
+                @endforeach
+                <button class="secondary" type="submit" style="margin-top: 12px;">Save decisions</button>
+            </form>
+        @endif
+    </section>
+
+    <section class="panel">
         <h2>Sync</h2>
         @if ($progress['known'])
             <div class="progress-top">
@@ -248,7 +350,10 @@
                 <input type="checkbox" name="schema_only" value="1" @checked(old('schema_only'))>
                 Schema only
             </label>
-            <button class="secondary" type="submit">Run sync</button>
+            @if ($analysisBlocked !== [])
+                <p class="muted">Blocked until decided above: {{ implode(', ', $analysisBlocked) }}.</p>
+            @endif
+            <button class="secondary" type="submit" @disabled($analysisBlocked !== [])>Run sync</button>
         </form>
         @if ($counts !== [])
             <table>

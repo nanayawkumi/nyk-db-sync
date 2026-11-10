@@ -100,6 +100,8 @@ php artisan nyk-db-sync:sync --no-schema
 php artisan nyk-db-sync:repair-sequences
 ```
 
+A sync analyzes first and stops on a blocking issue. See [Analyze](#analyze).
+
 The command and the admin page count the primary rows and show an estimated time before the copy starts. The first estimate is rough. Once rows are copying, the estimate uses that speed, including when a timeout or crash stops the run before it finishes.
 
 A sync creates missing tables and columns, then upserts every row. Existing columns are left as they are. Running it again updates the same primary keys. On Postgres, foreign keys are removed for the copy and put back when it finishes. A constraint that existing rows still violate is added or restored as `NOT VALID` and written to the log. Each Postgres `id` sequence is set to `MAX(id)` so the next insert does not reuse a copied id.
@@ -118,6 +120,65 @@ Models outside `app/Models` go in `models.extra`. `table_order` only changes ord
 ```
 
 If the process is killed, rows already committed stay on the secondary and foreign keys removed for that copy may still be off. Run the same command again, without `--no-schema`, and it continues.
+
+## Analyze
+
+Run this before the first sync, or whenever the data or schema has changed.
+
+```bash
+php artisan nyk-db-sync:analyze
+php artisan nyk-db-sync:analyze --table=orders
+php artisan nyk-db-sync:analyze --sample=10000
+php artisan nyk-db-sync:analyze --fix=auto
+php artisan nyk-db-sync:analyze --report
+```
+
+The analysis simulates the conversion and writes nothing. It maps every column the way the sync would, then scans the source data with one aggregate query per table, so rows are not pulled into PHP. Each table comes back `ready`, `ready with notes`, or `blocked`.
+
+It looks for:
+
+- a string longer than the destination column, which includes `SET` and unrecognized types stored as `string(255)`
+- integers outside the destination range, such as `UNSIGNED` columns on Postgres
+- zero dates (`0000-00-00`) going into a `NOT NULL` column
+- NUL bytes in text copied to Postgres
+- invalid JSON in a column that becomes `json`
+- enum values outside the declared list
+- `tinyint(1)` values other than 0 and 1 that would be flattened to a boolean
+- a table with no primary or unique index to upsert on. Postgres and SQLite refuse the copy when the table has rows. MySQL accepts it but a second sync adds the rows again.
+- rows that point at a missing parent (the foreign key is added as `NOT VALID`, so this is a warning)
+- Postgres values that differ only by case under a unique index, when the destination is MySQL
+- a table or column name longer than the destination allows
+- an existing destination column whose type no longer matches the source
+
+`--sample=N` scans only the first N rows of each table. Without it every row is scanned, which reads each table once.
+
+For each blocking issue you choose one of three answers.
+
+| Answer | Effect |
+| --- | --- |
+| Let the package fix it | The fix is saved and applied by the next sync. It only changes the destination: a wider column type, `NULL` allowed, or a value converted while copying. The source is never written to. |
+| I'll fix it myself | The table stays blocked until a new analysis comes back clean. |
+| Accept the risk | The table is unblocked and the issue stays listed as accepted. If a later analysis finds something different (for example more bad rows), the table is blocked again and you are asked again. |
+
+Run interactively, the command asks about each blocker. `--fix=auto|manual|skip` answers every open blocker without asking (`auto` leaves the ones that have no automatic fix). `--report` prints JSON and asks nothing. The exit code is non-zero while any table is blocked, so it can gate a deploy.
+
+An automatic fix is built into the table when the sync creates it or adds the column. On a table that already exists on Postgres, the sync alters the column (`ALTER COLUMN ... TYPE` or `DROP NOT NULL`). Existing columns on MySQL and SQLite are not altered. The issue then names the change to make by hand.
+
+Decisions are stored in `storage/app/nyk-db-sync/decisions.json` and the last analysis in `analysis.json`. A decision is dropped once the issue it answers no longer appears.
+
+### Sync gate
+
+`nyk-db-sync:sync` and the admin page check every table they are about to copy. A table with no analysis, an analysis older than `analysis.max_age_minutes`, or an analysis made before its schema changed is analyzed first. The sync stops, before anything is written, if any table still has an unresolved blocking issue. `--table=orders` checks only `orders`, and `--schema-only` stops only for schema problems, such as a name that is too long. A schema-only run does not scan the data, and what it finds is not stored.
+
+```bash
+php artisan nyk-db-sync:sync --skip-analysis
+```
+
+```dotenv
+NYK_DB_SYNC_ANALYSIS_REQUIRED=false
+```
+
+The first bypasses the check for one run. The second turns the gate off. The analysis scans the data as it is when it runs, so rows added afterward are not checked until the next analysis.
 
 ## Optimize
 
@@ -149,11 +210,13 @@ Primary inserts, updates, deletes, and pivot changes are repeated on the seconda
 
 Use the admin page, or `DatabaseEngineSwitcher::switchTo('pgsql', keepDualWrite: true)`.
 
-The switch is refused when the secondary is down, that engine is already live, or a table is missing or its row gap is larger than the greater of 10 and 1% of the source count (`alignment.minimum` and `alignment.ratio`). A backup of `.env` is written beside it, then `DB_CONNECTION` and `DB_DUAL_WRITE` are updated and queue workers are signaled to restart. Switching to Postgres realigns `id` sequences. **Repair Postgres IDs** does that without switching.
+The switch is refused when the secondary is down, that engine is already live, or a table is missing or its row count differs at all. Raise `alignment.minimum` and `alignment.ratio` only if the primary takes writes during the switch. The sync copies and updates rows but never deletes, so a row deleted on the source stays on the secondary and blocks the switch until you remove it. A backup of `.env` is written beside it (owner-only, newest `dotenv_backups` kept), then `DB_CONNECTION` and `DB_DUAL_WRITE` are updated and queue workers are signaled to restart. Switching to Postgres realigns `id` sequences. **Repair Postgres IDs** does that without switching.
 
 ## Admin page
 
-Off until you turn it on. The default URL is `/nyk-db-sync`, with the `web` and `auth` middleware.
+Off until you turn it on. The **Analyze** panel runs the same analysis as the command: it lists each table as ready or blocked, and each issue has a menu to let the package fix it, fix it yourself, or accept the risk. **Run sync** stays disabled while a stored analysis has a blocked table, and the server refuses the sync either way.
+
+The default URL is `/nyk-db-sync`, with the `web` and `auth` middleware.
 
 ```dotenv
 NYK_DB_SYNC_UI=true
@@ -169,6 +232,8 @@ You can also drop the same block into a page you already have:
 ```blade
 <x-nyk-db-sync />
 ```
+
+The page can run syncs, rewrite `.env` and take database superuser credentials, so it answers 403 until `ui.gate` names a Gate ability (`NYK_DB_SYNC_GATE`). If your middleware already limits the page to admins, set `NYK_DB_SYNC_ALLOW_UNGATED=true` to skip the gate. Row counts on the page are cached for `ui.counts_cache_seconds`.
 
 Limit it with a gate the site already uses:
 
@@ -197,6 +262,8 @@ The page shows whether each database accepted a connection, how many rows are al
 
 Translated: integers, booleans, decimals, strings, text, json, uuid, dates, times, inline enums, and indexes.
 
+Full-text indexes become the engine's own full-text index (a GIN index on Postgres). Spatial indexes are skipped. A plain index over a `TEXT` or `BLOB` column is skipped on Postgres and logged, because MySQL indexes those by prefix and a Postgres btree over the whole value fails on large rows. MySQL `ON UPDATE CURRENT_TIMESTAMP` is not carried over, so `updated_at` only changes when the application sets it. Binary columns reach Postgres `bytea` byte for byte. A source column that is missing on the secondary is not copied, and the sync summary lists it under `dropped_columns`. The package replaces the `mysql`, `pgsql`, `sqlite` and `mariadb` connection resolvers, so another package that does the same will conflict.
+
 Left unchanged: views, triggers, stored procedures, generated columns, native Postgres enums, MySQL `SET`, and existing column types. A `0000-00-00` value or column default becomes null, and that column is created nullable. Postgres arrays are stored as json.
 
 The database user has to own the tables so foreign keys can be removed and restored during the copy.
@@ -206,6 +273,10 @@ The database user has to own the tables so foreign keys can be removed and resto
 ```bash
 composer test
 ```
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## License
 
